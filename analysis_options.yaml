@@ -1,0 +1,11 @@
+include: package:lints/recommended.yaml
+
+linter:
+  rules:
+    - always_declare_return_types
+    - prefer_single_quotes
+    - prefer_const_constructors
+
+analyzer:
+  errors:
+    avoid_print: ignore # Allowed for CLI tools

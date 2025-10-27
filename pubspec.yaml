@@ -1,0 +1,27 @@
+name: motrgem
+description: A Flutter localization tool that automatically extracts hardcoded texts from widgets and converts them to l10n format.
+version: 1.0.0
+homepage: https://github.com/mohammadabusalh1/motrgem
+repository: https://github.com/mohammadabusalh1/motrgem
+issue_tracker: https://github.com/mohammadabusalh1/motrgem/issues
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+# Dependencies specify other packages that your package needs in order to work.
+# To automatically upgrade your package dependencies to the latest versions
+# consider running `flutter pub upgrade --major-versions`. Alternatively,
+# dependencies can be manually updated by changing the version numbers below to
+# the latest version available on pub.dev. To see which dependencies have newer
+# versions available, run `flutter pub outdated`.
+dependencies:
+  analyzer: ^6.0.0
+  args: ^2.5.0
+  path: ^1.9.0
+  yaml: ^3.1.0
+
+dev_dependencies:
+  lints: ^5.0.0
+
+executables:
+  motrgem:

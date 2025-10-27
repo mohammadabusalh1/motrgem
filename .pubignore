@@ -1,0 +1,25 @@
+# Exclude Flutter app example files
+android/
+ios/
+linux/
+macos/
+windows/
+web/
+test/
+lib/main.dart
+lib/l10n/
+l10n.yaml
+bin/l10n_extractor.dart
+
+# Exclude IDE and build files
+.dart_tool/
+.idea/
+.vscode/
+*.iml
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+.packages
+pubspec.lock
+build/
+
