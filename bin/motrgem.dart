@@ -68,7 +68,16 @@ void main(List<String> arguments) async {
     // Handle add locale command
     if (addLocale != null) {
       print('📦 Adding locale: $addLocale');
+      print('');
+      print(
+          'This will automatically translate all texts using Google Translate.');
+      print('Translations may need manual review for accuracy.');
+      print('');
       await manager.addLocale(addLocale);
+      print('');
+      print('✅ Locale added successfully!');
+      print(
+          '💡 Tip: Review translations in lib/l10n/app_$addLocale.arb for accuracy');
       exit(0);
     }
 
@@ -98,10 +107,11 @@ void main(List<String> arguments) async {
       }
 
       if (replace && !dryRun) {
-        print('\n⚠️  Important: Don\'t forget to:');
-        print('   1. Run "flutter pub get" to generate localization files');
-        print('   2. Add localization delegates to your MaterialApp');
-        print('   3. Review the changes and test your app');
+        print('\n📝 Next steps:');
+        print(
+            '   1. Add localization delegates to your MaterialApp (if not already added)');
+        print('   2. Review the changes and test your app');
+        print('   3. Translate texts in other locale ARB files if needed');
       }
     }
   } on FormatException catch (e) {

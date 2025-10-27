@@ -18,10 +18,10 @@ class L10nManager {
     bool dryRun = false,
   }) async {
     print('🔍 Extracting texts from project: $projectPath');
-    
+
     // Step 1: Extract all texts
     final extractedTexts = await extractor.extractTextFromProject(projectPath);
-    
+
     if (extractedTexts.isEmpty) {
       print('✅ No hardcoded texts found!');
       return L10nResult(
@@ -62,19 +62,21 @@ class L10nManager {
     // Step 4: Replace in code if requested
     if (replaceInCode) {
       print('\n🔄 Replacing texts in code...');
-      
+
       for (final text in textsWithIds) {
         try {
           final success = await extractor.replaceTextByName(
             text.filePath,
             text,
           );
-          
+
           if (success) {
             replacedCount++;
-            print('  ✅ Replaced in ${path.basename(text.filePath)}: "${text.text}"');
+            print(
+                '  ✅ Replaced in ${path.basename(text.filePath)}: "${text.text}"');
           } else {
-            final error = 'Failed to replace in ${text.filePath}: "${text.text}"';
+            final error =
+                'Failed to replace in ${text.filePath}: "${text.text}"';
             errors.add(error);
             print('  ❌ $error');
           }
@@ -88,6 +90,10 @@ class L10nManager {
       // Add import statement to files that were modified
       if (replacedCount > 0) {
         await _addImportsToModifiedFiles(textsWithIds);
+
+        // Run Flutter commands to generate localization files
+        print('\n🔧 Running Flutter commands...');
+        await _runFlutterCommands();
       }
     }
 
@@ -135,7 +141,7 @@ class L10nManager {
       }
 
       usedIds.add(uniqueId);
-      
+
       result.add(ExtractedText(
         text: text.text,
         filePath: text.filePath,
@@ -154,27 +160,37 @@ class L10nManager {
   Future<void> _addImportsToModifiedFiles(List<ExtractedText> texts) async {
     final modifiedFiles = texts.map((t) => t.filePath).toSet();
 
+    // Get the package name from the project's pubspec.yaml
+    final packageName = await _getPackageName();
+    if (packageName == null) {
+      print('  ⚠️  Could not determine package name from pubspec.yaml');
+      return;
+    }
+
+    final importStatement =
+        "import 'package:$packageName/l10n/app_localizations.dart';";
+
     for (final filePath in modifiedFiles) {
       try {
         final file = File(filePath);
         String content = await file.readAsString();
 
         // Check if import already exists
-        if (!content.contains('flutter_gen/gen_l10n/app_localizations.dart')) {
+        if (!content.contains('/l10n/app_localizations.dart')) {
           // Find the position after the last import
           final importRegex = RegExp(r"import '[^']+';");
           final matches = importRegex.allMatches(content).toList();
-          
+
           if (matches.isNotEmpty) {
             final lastImport = matches.last;
             final insertPosition = lastImport.end;
-            
+
             content = content.substring(0, insertPosition) +
-                "\nimport 'package:flutter_gen/gen_l10n/app_localizations.dart';" +
+                "\n$importStatement" +
                 content.substring(insertPosition);
           } else {
             // No imports found, add at the beginning
-            content = "import 'package:flutter_gen/gen_l10n/app_localizations.dart';\n" + content;
+            content = "$importStatement\n" + content;
           }
 
           await file.writeAsString(content);
@@ -183,6 +199,86 @@ class L10nManager {
       } catch (e) {
         print('  ⚠️  Could not add import to $filePath: $e');
       }
+    }
+  }
+
+  /// Gets the package name from pubspec.yaml
+  Future<String?> _getPackageName() async {
+    try {
+      final pubspecPath = path.join(projectPath, 'pubspec.yaml');
+      final file = File(pubspecPath);
+
+      if (!file.existsSync()) {
+        return null;
+      }
+
+      final content = await file.readAsString();
+      final nameRegex = RegExp(r'^name:\s*(.+)$', multiLine: true);
+      final match = nameRegex.firstMatch(content);
+
+      if (match != null) {
+        return match.group(1)?.trim();
+      }
+
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Runs Flutter commands to generate localization files and clean build
+  Future<void> _runFlutterCommands() async {
+    try {
+      // Run flutter clean
+      print('  🧹 Running flutter clean...');
+      final cleanResult = await Process.run(
+        'flutter',
+        ['clean'],
+        workingDirectory: projectPath,
+        runInShell: true,
+      );
+
+      if (cleanResult.exitCode == 0) {
+        print('  ✅ flutter clean completed');
+      } else {
+        print('  ⚠️  flutter clean warning: ${cleanResult.stderr}');
+      }
+
+      // Run flutter pub get
+      print('  📦 Running flutter pub get...');
+      final pubGetResult = await Process.run(
+        'flutter',
+        ['pub', 'get'],
+        workingDirectory: projectPath,
+        runInShell: true,
+      );
+
+      if (pubGetResult.exitCode == 0) {
+        print('  ✅ flutter pub get completed');
+      } else {
+        print('  ⚠️  flutter pub get warning: ${pubGetResult.stderr}');
+      }
+
+      // Run flutter gen-l10n
+      print('  🌍 Running flutter gen-l10n...');
+      final genL10nResult = await Process.run(
+        'flutter',
+        ['gen-l10n'],
+        workingDirectory: projectPath,
+        runInShell: true,
+      );
+
+      if (genL10nResult.exitCode == 0) {
+        print('  ✅ flutter gen-l10n completed');
+        print('  📝 Localization files generated successfully!');
+      } else {
+        print('  ⚠️  flutter gen-l10n warning: ${genL10nResult.stderr}');
+        print(
+            '  💡 Note: Localization files will be generated automatically on next flutter pub get');
+      }
+    } catch (e) {
+      print('  ⚠️  Could not run Flutter commands: $e');
+      print('  💡 Please run manually: flutter clean && flutter pub get');
     }
   }
 
@@ -206,4 +302,3 @@ class L10nResult {
   bool get hasErrors => errors.isNotEmpty;
   bool get isSuccess => !hasErrors && extractedCount > 0;
 }
-

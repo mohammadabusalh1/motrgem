@@ -60,14 +60,6 @@ The library extracts text from these common Flutter widgets:
 
 Initialize a Flutter project with l10n support:
 
-**If installed globally:**
-
-```bash
-motrgem start
-```
-
-**If installed as dev dependency:**
-
 ```bash
 dart run motrgem start
 ```
@@ -85,15 +77,7 @@ This command will:
 See what would be extracted without making any changes:
 
 ```bash
-motrgem --dry-run
-```
-
-### Extract texts only
-
-Add extracted texts to the ARB file without modifying your code:
-
-```bash
-motrgem
+dart run motrgem --dry-run
 ```
 
 ### Extract and replace
@@ -101,7 +85,7 @@ motrgem
 Extract texts, update ARB file, and replace hardcoded strings in your code:
 
 ```bash
-motrgem --replace
+dart run motrgem --replace
 ```
 
 ### Add a new locale
@@ -109,15 +93,9 @@ motrgem --replace
 Create a new locale file (e.g., Spanish, French, Arabic):
 
 ```bash
-motrgem --add-locale es
-motrgem --add-locale fr
-motrgem --add-locale ar
-```
-
-### Process a specific project
-
-```bash
-motrgem --project /path/to/project --replace
+dart run motrgem --add-locale es
+dart run motrgem --add-locale fr
+dart run motrgem --add-locale ar
 ```
 
 > **Note**: If using as a dev dependency, prefix all commands with `dart run`, e.g., `dart run motrgem start`
@@ -130,7 +108,7 @@ motrgem --project /path/to/project --replace
 2. Initialize l10n support:
 
 ```bash
-motrgem start
+dart run motrgem start
 ```
 
 3. Install dependencies:
@@ -142,7 +120,7 @@ flutter pub get
 4. Extract and replace texts:
 
 ```bash
-motrgem --replace
+dart run motrgem --replace
 ```
 
 ### Prerequisites

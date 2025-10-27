@@ -85,23 +85,23 @@ class ProjectInitializer {
     bool modified = false;
 
     // Add flutter_localizations if not present
-    if (dependencies != null &&
+    if (dependencies == null ||
         !dependencies.containsKey('flutter_localizations')) {
       content = _addDependency(
         content,
         'flutter_localizations',
-        '    sdk: flutter',
+        'sdk: flutter',
         section: 'dependencies',
       );
       modified = true;
     }
 
     // Add intl if not present
-    if (dependencies != null && !dependencies.containsKey('intl')) {
+    if (dependencies == null || !dependencies.containsKey('intl')) {
       content = _addDependency(
         content,
         'intl',
-        '^0.20.2',
+        'any',
         section: 'dependencies',
       );
       modified = true;
@@ -109,10 +109,10 @@ class ProjectInitializer {
 
     // Add dev dependencies
     final devDepsToAdd = {
-      'analyzer': '^6.0.0',
-      'path': '^1.9.0',
-      'args': '^2.5.0',
-      'yaml': '^3.1.0',
+      'analyzer': 'any',
+      'path': 'any',
+      'args': 'any',
+      'yaml': 'any',
     };
 
     for (final entry in devDepsToAdd.entries) {
@@ -129,12 +129,18 @@ class ProjectInitializer {
 
     // Add flutter.generate if not present
     if (!content.contains('generate: true')) {
-      if (content.contains('flutter:')) {
-        content = content.replaceFirst(
-          RegExp(r'flutter:\s*\n'),
-          'flutter:\n  generate: true\n',
-        );
+      // Find the flutter section
+      final flutterRegex = RegExp(r'^flutter:\s*$', multiLine: true);
+      final flutterMatch = flutterRegex.firstMatch(content);
+
+      if (flutterMatch != null) {
+        // Insert generate: true after flutter:
+        final insertPos = flutterMatch.end + 1; // +1 for newline
+        content = content.substring(0, insertPos) +
+            '  generate: true\n' +
+            content.substring(insertPos);
       } else {
+        // Add flutter section at the end
         content += '\nflutter:\n  generate: true\n';
       }
       modified = true;
@@ -151,30 +157,52 @@ class ProjectInitializer {
     String value, {
     required String section,
   }) {
-    // Find the section and add dependency
-    final sectionRegex = RegExp('$section:\\s*\n', multiLine: true);
-    if (sectionRegex.hasMatch(content)) {
-      // Add after the section header
-      if (value.startsWith('sdk:')) {
-        return content.replaceFirst(
-          sectionRegex,
-          '$section:\n  $name:\n    $value\n',
-        );
-      } else {
-        return content.replaceFirst(
-          sectionRegex,
-          '$section:\n  $name: $value\n',
-        );
-      }
-    } else {
-      // Section doesn't exist, create it
-      if (value.startsWith('sdk:')) {
-        content += '\n$section:\n  $name:\n    $value\n';
-      } else {
-        content += '\n$section:\n  $name: $value\n';
-      }
+    // Check if dependency already exists in content (to avoid duplicates)
+    final depCheckRegex =
+        RegExp(r'^\s+' + RegExp.escape(name) + r':', multiLine: true);
+    if (depCheckRegex.hasMatch(content)) {
+      // Dependency already exists, don't add again
+      return content;
     }
-    return content;
+
+    // Find the section
+    final sectionRegex = RegExp('^$section:\\s*\$', multiLine: true);
+    final sectionMatch = sectionRegex.firstMatch(content);
+
+    if (sectionMatch != null) {
+      // Section exists, find where to insert (after section line)
+      final sectionEnd = sectionMatch.end;
+
+      // Find the next line after the section header
+      int insertPosition = sectionEnd;
+
+      // Skip the newline after section header
+      if (insertPosition < content.length && content[insertPosition] == '\n') {
+        insertPosition++;
+      }
+
+      // Build the dependency string
+      String dependencyString;
+      if (value.startsWith('sdk:')) {
+        dependencyString = '  $name:\n    $value\n';
+      } else {
+        dependencyString = '  $name: $value\n';
+      }
+
+      // Insert the dependency
+      return content.substring(0, insertPosition) +
+          dependencyString +
+          content.substring(insertPosition);
+    } else {
+      // Section doesn't exist, create it at the end
+      String dependencyString;
+      if (value.startsWith('sdk:')) {
+        dependencyString = '\n$section:\n  $name:\n    $value\n';
+      } else {
+        dependencyString = '\n$section:\n  $name: $value\n';
+      }
+      return content + dependencyString;
+    }
   }
 
   /// Creates l10n.yaml configuration file
