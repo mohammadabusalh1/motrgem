@@ -108,10 +108,9 @@ void main(List<String> arguments) async {
 
       if (replace && !dryRun) {
         print('\n📝 Next steps:');
-        print(
-            '   1. Add localization delegates to your MaterialApp (if not already added)');
-        print('   2. Review the changes and test your app');
-        print('   3. Translate texts in other locale ARB files if needed');
+        print('   1. Review the changes and test your app');
+        print('   2. Add more locales if needed using --add-locale');
+        print('   3. Translate texts in locale ARB files if needed');
       }
     }
   } on FormatException catch (e) {

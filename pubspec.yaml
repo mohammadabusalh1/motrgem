@@ -1,6 +1,6 @@
 name: motrgem
 description: A Flutter localization tool that automatically extracts hardcoded texts from widgets and converts them to l10n format.
-version: 1.0.1
+version: 1.0.2
 homepage: https://github.com/mohammadabusalh1/motrgem
 repository: https://github.com/mohammadabusalh1/motrgem
 issue_tracker: https://github.com/mohammadabusalh1/motrgem/issues

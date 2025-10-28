@@ -1,5 +1,7 @@
 ## 1.0.2
 
+- Added automatic MaterialApp configuration with localization delegates
+- Automatically configures `localizationsDelegates` and `supportedLocales` in MaterialApp
 - Added automatic translation when creating new locale files using `--add-locale`
 - Automatically translates all texts using Google Translate
 - Fixed import statement to use correct package name format: `package:[PackageName]/l10n/app_localizations.dart`

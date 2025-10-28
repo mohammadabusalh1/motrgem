@@ -7,14 +7,6 @@ A powerful command-line tool that automatically extracts hardcoded text strings 
 
 ## Installation
 
-### Global Installation (Recommended)
-
-Install globally to use `motrgem` command anywhere:
-
-```bash
-dart pub global activate motrgem
-```
-
 ### As Dev Dependency
 
 Add to your Flutter project's `pubspec.yaml`:
@@ -28,6 +20,14 @@ Then run:
 
 ```bash
 flutter pub get
+```
+
+### Global Installation (Recommended)
+
+Install globally to use `motrgem` command anywhere:
+
+```bash
+dart pub global activate motrgem
 ```
 
 ## Features

@@ -91,6 +91,9 @@ class L10nManager {
       if (replacedCount > 0) {
         await _addImportsToModifiedFiles(textsWithIds);
 
+        // Configure MaterialApp for localization
+        await _configureMaterialApp();
+
         // Run Flutter commands to generate localization files
         print('\n🔧 Running Flutter commands...');
         await _runFlutterCommands();
@@ -282,9 +285,89 @@ class L10nManager {
     }
   }
 
+  /// Configures MaterialApp widget with localization delegates
+  Future<void> _configureMaterialApp() async {
+    print('\n📱 Configuring MaterialApp...');
+
+    try {
+      // Find main.dart or any file with MaterialApp
+      final libPath = path.join(projectPath, 'lib');
+      final dartFiles = Directory(libPath)
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((file) => file.path.endsWith('.dart'))
+          .toList();
+
+      for (final file in dartFiles) {
+        String content = await file.readAsString();
+
+        // Check if file contains MaterialApp
+        if (!content.contains('MaterialApp')) {
+          continue;
+        }
+
+        bool modified = false;
+
+        // Check if localizationsDelegates is already configured
+        if (!content.contains('localizationsDelegates')) {
+          // Find MaterialApp( and add localization config
+          final materialAppRegex = RegExp(
+            r'MaterialApp\s*\(',
+            multiLine: true,
+          );
+
+          final match = materialAppRegex.firstMatch(content);
+          if (match != null) {
+            // Find the position after MaterialApp(
+            int insertPos = match.end;
+
+            // Skip whitespace and newlines
+            while (insertPos < content.length &&
+                (content[insertPos] == ' ' ||
+                    content[insertPos] == '\n' ||
+                    content[insertPos] == '\r')) {
+              insertPos++;
+            }
+
+            // Insert localization configuration
+            final localizationConfig = '''
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+''';
+
+            content = content.substring(0, insertPos) +
+                localizationConfig +
+                content.substring(insertPos);
+
+            modified = true;
+            print(
+                '  ✅ Added localization configuration to ${path.basename(file.path)}');
+          }
+        } else {
+          print(
+              '  ℹ️  ${path.basename(file.path)} already has localization configuration');
+        }
+
+        if (modified) {
+          await file.writeAsString(content);
+        }
+      }
+    } catch (e) {
+      print('  ⚠️  Could not configure MaterialApp: $e');
+      print('  💡 Please add localization configuration manually');
+    }
+  }
+
   /// Creates additional locale files
   Future<void> addLocale(String locale) async {
     await arbManager.createLocaleFile(locale);
+
+    // Update MaterialApp configuration after adding locale
+    print('\n📱 Updating MaterialApp configuration...');
+    await _configureMaterialApp();
+
+    print(
+        '\n💡 Note: The new locale will be automatically included in supportedLocales');
   }
 }
 
