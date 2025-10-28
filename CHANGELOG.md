@@ -1,3 +1,15 @@
+## 1.0.4
+
+- Updated README with improved installation instructions
+- Added comprehensive guide for changing language at runtime
+- Improved documentation for const keyword handling
+- Enhanced examples and usage documentation
+
+## 1.0.3
+
+- Documentation improvements and bug fixes
+- Updated example code
+
 ## 1.0.2
 
 - Added automatic MaterialApp configuration with localization delegates

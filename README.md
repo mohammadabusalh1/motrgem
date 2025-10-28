@@ -7,19 +7,37 @@ A powerful command-line tool that automatically extracts hardcoded text strings 
 
 ## Installation
 
-### As Dev Dependency
+### Option 1: Quick Install (Recommended for Dev Dependency)
 
-Install:
+Run this command in your Flutter project:
 
 ```bash
-flutter pub add motrgem
+flutter pub add dev:motrgem
 ```
 
-Add to your Flutter project's `pubspec.yaml`:
+This automatically adds `motrgem` to your `dev_dependencies` and runs `flutter pub get`.
+
+### Option 2: Global Installation (Recommended for CLI Tool)
+
+Install globally to use the `motrgem` command anywhere:
+
+```bash
+dart pub global activate motrgem
+```
+
+**Verify installation:**
+
+```bash
+motrgem --help
+```
+
+### Option 3: Manual Installation
+
+Add to your `pubspec.yaml`:
 
 ```yaml
 dev_dependencies:
-  motrgem: ^1.0.0
+  motrgem: ^1.0.4
 ```
 
 Then run:
@@ -28,13 +46,12 @@ Then run:
 flutter pub get
 ```
 
-### Global Installation (Recommended)
+---
 
-Install globally to use `motrgem` command anywhere:
+**Command Usage:**
 
-```bash
-dart pub global activate motrgem
-```
+- **Global install**: `motrgem start`, `motrgem --replace`
+- **Dev dependency**: `dart run motrgem start`, `dart run motrgem --replace`
 
 ## Features
 
