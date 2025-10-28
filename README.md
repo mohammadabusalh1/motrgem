@@ -9,6 +9,12 @@ A powerful command-line tool that automatically extracts hardcoded text strings 
 
 ### As Dev Dependency
 
+Install:
+
+```bash
+flutter pub add motrgem
+```
+
 Add to your Flutter project's `pubspec.yaml`:
 
 ```yaml
