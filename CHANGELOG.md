@@ -1,3 +1,10 @@
+## 1.0.5
+
+- Fixed duplicate text entries in ARB files
+- Now reuses existing IDs for the same text instead of creating duplicates
+- Improved text-to-ID mapping for better deduplication
+- Added visual feedback when reusing IDs
+
 ## 1.0.4
 
 - Updated README with improved installation instructions

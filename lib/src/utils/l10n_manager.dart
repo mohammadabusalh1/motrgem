@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:path/path.dart' as path;
 import 'Text_extractor.dart';
 import 'arb_manager.dart';
@@ -128,22 +129,38 @@ class L10nManager {
     final result = <ExtractedText>[];
     final usedIds = <String>{...existingIds};
     final idCounts = <String, int>{};
+    final textToIdMap = <String, String>{}; // Map to track text -> ID for reuse
+
+    // First, load existing text-to-ID mappings from ARB file
+    final existingMappings = await _getExistingTextMappings();
+    textToIdMap.addAll(existingMappings);
 
     for (final text in texts) {
-      String baseId = await extractor.generateTextId(text.text);
-      String uniqueId = baseId;
+      String uniqueId;
 
-      // Handle duplicates by appending numbers
-      if (usedIds.contains(uniqueId)) {
-        int count = idCounts[baseId] ?? 1;
-        do {
-          count++;
-          uniqueId = '$baseId$count';
-        } while (usedIds.contains(uniqueId));
-        idCounts[baseId] = count;
+      // Check if we've already seen this exact text
+      if (textToIdMap.containsKey(text.text)) {
+        // Reuse the existing ID for the same text
+        uniqueId = textToIdMap[text.text]!;
+        print('  ♻️  Reusing ID "$uniqueId" for: "${text.text}"');
+      } else {
+        // Generate new ID for new text
+        String baseId = await extractor.generateTextId(text.text);
+        uniqueId = baseId;
+
+        // Handle ID collisions (different text, same generated ID)
+        if (usedIds.contains(uniqueId)) {
+          int count = idCounts[baseId] ?? 1;
+          do {
+            count++;
+            uniqueId = '$baseId$count';
+          } while (usedIds.contains(uniqueId));
+          idCounts[baseId] = count;
+        }
+
+        usedIds.add(uniqueId);
+        textToIdMap[text.text] = uniqueId; // Store mapping for future reuse
       }
-
-      usedIds.add(uniqueId);
 
       result.add(ExtractedText(
         text: text.text,
@@ -157,6 +174,34 @@ class L10nManager {
     }
 
     return result;
+  }
+
+  /// Gets existing text-to-ID mappings from ARB file
+  Future<Map<String, String>> _getExistingTextMappings() async {
+    final mappings = <String, String>{};
+
+    try {
+      final arbPath = path.join(projectPath, 'lib', 'l10n', 'app_en.arb');
+      final file = File(arbPath);
+
+      if (!file.existsSync()) {
+        return mappings;
+      }
+
+      final content = await file.readAsString();
+      final arbContent = json.decode(content) as Map<String, dynamic>;
+
+      // Build text -> ID map from existing ARB
+      for (final entry in arbContent.entries) {
+        if (!entry.key.startsWith('@')) {
+          mappings[entry.value as String] = entry.key;
+        }
+      }
+    } catch (e) {
+      // If we can't read the ARB file, just return empty map
+    }
+
+    return mappings;
   }
 
   /// Adds necessary imports to modified files
