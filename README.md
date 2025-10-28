@@ -86,6 +86,24 @@ Extract texts, update ARB file, and replace hardcoded strings in your code:
 
 ```bash
 dart run motrgem --replace
+flutter clean
+flutter pub get
+```
+
+### Const Keyword remove
+
+You should delete all `const` widgets which use AppLocalizations:
+
+**Before:**
+
+```dart
+const Text(AppLocalizations.of(context)!.helloWorld)
+```
+
+**Should be After:**
+
+```dart
+Text(AppLocalizations.of(context)!.helloWorld)
 ```
 
 ### Add a new locale
@@ -99,6 +117,92 @@ dart run motrgem --add-locale ar
 ```
 
 > **Note**: If using as a dev dependency, prefix all commands with `dart run`, e.g., `dart run motrgem start`
+
+### Changing Language at Runtime
+
+After setting up localization, you can allow users to change the app language dynamically:
+
+#### 1. Make your app stateful with locale management:
+
+```dart
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:your_app/l10n/app_localizations.dart';
+
+void main() => runApp(const MyApp());
+
+class MyApp extends StatefulWidget {
+  const MyApp({Key? key}) : super(key: key);
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+
+  // Static method to change locale from anywhere in the app
+  static void setLocale(BuildContext context, Locale newLocale) {
+    _MyAppState? state = context.findAncestorStateOfType<_MyAppState>();
+    state?.setLocale(newLocale);
+  }
+}
+
+class _MyAppState extends State<MyApp> {
+  Locale? _locale;
+
+  void setLocale(Locale locale) {
+    setState(() {
+      _locale = locale;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      locale: _locale,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: const HomePage(),
+    );
+  }
+}
+```
+
+#### 2. Change language from anywhere in your app:
+
+```dart
+// Switch to Spanish
+MyApp.setLocale(context, const Locale('es'));
+
+// Switch to Arabic
+MyApp.setLocale(context, const Locale('ar'));
+
+// Switch to English
+MyApp.setLocale(context, const Locale('en'));
+```
+
+#### 3. Example: Language selector dropdown:
+
+```dart
+class LanguageSelector extends StatelessWidget {
+  const LanguageSelector({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownButton<String>(
+      value: Localizations.localeOf(context).languageCode,
+      items: const [
+        DropdownMenuItem(value: 'en', child: Text('English')),
+        DropdownMenuItem(value: 'es', child: Text('Español')),
+        DropdownMenuItem(value: 'ar', child: Text('العربية')),
+        DropdownMenuItem(value: 'fr', child: Text('Français')),
+      ],
+      onChanged: (String? languageCode) {
+        if (languageCode != null) {
+          MyApp.setLocale(context, Locale(languageCode));
+        }
+      },
+    );
+  }
+}
+```
 
 ## Getting Started
 
