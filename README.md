@@ -37,7 +37,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dev_dependencies:
-  motrgem: ^1.0.4
+  motrgem: ^1.1.1
 ```
 
 Then run:
@@ -137,6 +137,8 @@ Create a new locale file (e.g., Spanish, French, Arabic):
 dart run motrgem --add-locale es
 dart run motrgem --add-locale fr
 dart run motrgem --add-locale ar
+flutter clean
+flutter pub get
 ```
 
 > **Note**: If using as a dev dependency, prefix all commands with `dart run`, e.g., `dart run motrgem start`

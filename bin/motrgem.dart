@@ -90,7 +90,7 @@ void main(List<String> arguments) async {
       dryRun: dryRun,
     );
 
-    print('\n━' * 50);
+    print('\n━' * 2);
 
     if (result.hasErrors) {
       print('⚠️  Completed with errors');
@@ -161,9 +161,9 @@ Future<void> _handleStartCommand(List<String> args) async {
     if (result.success) {
       print('\n✅ Project initialized successfully!');
       print('\n📝 Next steps:');
-      print('  1. Run: flutter pub get');
-      print('  2. Run: motrgem --dry-run');
-      print('  3. Run: motrgem --replace');
+      print('  1. Run: dart run flutter pub get');
+      print('  2. Run: dart run motrgem --dry-run');
+      print('  3. Run: dart run motrgem --replace');
       exit(0);
     } else {
       print('\n⚠️  Initialization completed with errors');
@@ -185,14 +185,14 @@ void _printStartUsage() {
   print('');
   print('Initializes a Flutter project with l10n support.');
   print('');
-  print('Usage: motrgem start [options]');
+  print('Usage: dart run motrgem start [options]');
   print('');
   print('Options:');
   print('  -p, --project    Path to the Flutter project (default: ".")');
   print('  -h, --help       Show this help message');
   print('');
   print('Example:');
-  print('  motrgem start');
+  print('  dart run motrgem start');
 }
 
 void _printUsage(ArgParser parser) {
@@ -201,7 +201,7 @@ void _printUsage(ArgParser parser) {
   print('A tool to extract hardcoded texts from Flutter widgets and');
   print('convert them to l10n (localization) format.');
   print('');
-  print('Usage: motrgem [command] [options]');
+  print('Usage: dart run motrgem [command] [options]');
   print('');
   print('Commands:');
   print('  start            Initialize project with l10n support');
@@ -212,20 +212,20 @@ void _printUsage(ArgParser parser) {
   print('Examples:');
   print('');
   print('  # Initialize project with l10n support');
-  print('  motrgem start');
+  print('  dart run motrgem start');
   print('');
   print('  # Analyze project and show what would be extracted (dry run)');
-  print('  motrgem --dry-run');
+  print('  dart run motrgem --dry-run');
   print('');
   print('  # Extract texts and add to ARB file (no code changes)');
-  print('  motrgem');
+  print('  dart run motrgem');
   print('');
   print('  # Extract texts and replace in code');
-  print('  motrgem --replace');
+  print('  dart run motrgem --replace');
   print('');
   print('  # Add a new locale (Spanish)');
-  print('  motrgem --add-locale es');
+  print('  dart run motrgem --add-locale es');
   print('');
   print('  # Process a specific project');
-  print('  motrgem --project /path/to/project --replace');
+  print('  dart run motrgem --project /path/to/project --replace');
 }

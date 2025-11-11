@@ -1,4 +1,4 @@
-## 1.0.5
+## 1.0.6
 
 - Fixed duplicate text entries in ARB files
 - Now reuses existing IDs for the same text instead of creating duplicates

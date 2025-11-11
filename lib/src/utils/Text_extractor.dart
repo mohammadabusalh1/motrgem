@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:analyzer/dart/analysis/analysis_context_collection.dart';
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:path/path.dart' as path;
 
@@ -9,19 +10,23 @@ class ExtractedText {
   final String text;
   final String filePath;
   final int offset;
+  final int length;
   final int line;
   final int column;
   final String widgetType;
   final String generatedId;
+  final List<String> placeholders;
 
   ExtractedText({
     required this.text,
     required this.filePath,
     required this.offset,
+    required this.length,
     required this.line,
     required this.column,
     required this.widgetType,
     required this.generatedId,
+    this.placeholders = const [],
   });
 
   @override
@@ -34,10 +39,12 @@ class ExtractedText {
       'text': text,
       'filePath': filePath,
       'offset': offset,
+      'length': length,
       'line': line,
       'column': column,
       'widgetType': widgetType,
       'generatedId': generatedId,
+      'placeholders': placeholders,
     };
   }
 }
@@ -109,19 +116,18 @@ class TextExtractor {
       }
 
       String content = await file.readAsString();
-      final originalText = "'${extractedText.text}'";
-      final doubleQuoteText = '"${extractedText.text}"';
-      final replacement =
-          'AppLocalizations.of(context)!.${extractedText.generatedId}';
+      final args = extractedText.placeholders;
+      final replacement = args.isNotEmpty
+          ? 'AppLocalizations.of(context)!.${extractedText.generatedId}(${args.join(', ')})'
+          : 'AppLocalizations.of(context)!.${extractedText.generatedId}';
+      final start = extractedText.offset;
+      final end = start + extractedText.length;
 
-      // Try single quotes first, then double quotes
-      if (content.contains(originalText)) {
-        content = content.replaceFirst(originalText, replacement);
-      } else if (content.contains(doubleQuoteText)) {
-        content = content.replaceFirst(doubleQuoteText, replacement);
-      } else {
+      if (start < 0 || end > content.length) {
         return false;
       }
+
+      content = content.replaceRange(start, end, replacement);
 
       await file.writeAsString(content);
       return true;
@@ -135,8 +141,14 @@ class TextExtractor {
   Future<String> generateTextId(String text) async {
     // Convert text to camelCase ID
     // Remove special characters and convert to lowercase
-    String cleaned = text
-        .replaceAll(RegExp(r'[^\w\s]'), '')
+    // Normalize any interpolation placeholders {...} to the word "value"
+    String normalizedPlaceholders =
+        text.replaceAll(RegExp(r'\{[^}]*\}'), ' value ');
+    // Turn underscores into spaces to avoid leaking them into IDs
+    normalizedPlaceholders =
+        normalizedPlaceholders.replaceAll(RegExp(r'_+'), ' ');
+    String cleaned = normalizedPlaceholders
+        .replaceAll(RegExp(r'[^\w\s]'), ' ')
         .trim()
         .toLowerCase();
 
@@ -162,6 +174,181 @@ class TextExtractor {
 
     return id;
   }
+
+  /// Removes const keywords from widgets that contain AppLocalizations.of(context)
+  Future<int> removeConstKeywords(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (!file.existsSync()) {
+        return 0;
+      }
+
+      // Create analysis context - need directory path, not file path
+      final fileDir = path.dirname(filePath);
+      final collection = AnalysisContextCollection(includedPaths: [fileDir]);
+      final context = collection.contextFor(filePath);
+      final result = await context.currentSession.getResolvedUnit(filePath);
+
+      if (result is! ResolvedUnitResult) {
+        return 0;
+      }
+
+      // Use visitor to find widgets with AppLocalizations and const keywords
+      final visitor = _ConstRemovalVisitor(result.lineInfo, this);
+      result.unit.visitChildren(visitor);
+
+      if (visitor.constRemovalRanges.isEmpty) {
+        return 0;
+      }
+
+      // Read file content
+      String content = await file.readAsString();
+
+      // Sort ranges by offset in reverse order to avoid offset shifting issues
+      final sortedRanges = visitor.constRemovalRanges.toList()
+        ..sort((a, b) => b.start.compareTo(a.start));
+
+      // Apply edits in reverse order
+      for (final range in sortedRanges) {
+        // Calculate the end position, including all trailing whitespace after "const"
+        int endPos = range.end;
+
+        // Remove all whitespace after "const" (spaces, tabs, but preserve newlines for formatting)
+        while (endPos < content.length) {
+          final char = content[endPos];
+          if (char == ' ' || char == '\t') {
+            endPos++;
+          } else if (char == '\n' || char == '\r') {
+            // Preserve newlines - they're part of the formatting
+            break;
+          } else {
+            // Non-whitespace character - stop here
+            break;
+          }
+        }
+
+        // Remove const keyword and trailing whitespace
+        final beforeConst = content.substring(0, range.start);
+        final afterConst = content.substring(endPos);
+        content = beforeConst + afterConst;
+      }
+
+      // Write updated content
+      await file.writeAsString(content);
+
+      return visitor.constRemovalRanges.length;
+    } catch (e) {
+      print('Error removing const keywords in file $filePath: $e');
+      return 0;
+    }
+  }
+
+  /// Checks if an expression contains AppLocalizations.of(context) pattern
+  bool containsAppLocalizations(Expression? expression) {
+    if (expression == null) return false;
+
+    // Check for MethodInvocation: AppLocalizations.of(context)
+    if (expression is MethodInvocation) {
+      // Check if it's AppLocalizations.of(context)
+      if (isAppLocalizationsCall(expression)) {
+        return true;
+      }
+      // Check arguments recursively
+      for (final arg in expression.argumentList.arguments) {
+        if (arg is NamedExpression) {
+          if (containsAppLocalizations(arg.expression)) return true;
+        } else {
+          // Positional arguments are Expression
+          if (containsAppLocalizations(arg)) return true;
+        }
+      }
+    }
+
+    // Check for PostfixExpression: AppLocalizations.of(context)!
+    if (expression is PostfixExpression &&
+        containsAppLocalizations(expression.operand)) {
+      return true;
+    }
+
+    // Check for PropertyAccess: AppLocalizations.of(context)!.someProperty
+    if (expression is PropertyAccess &&
+        containsAppLocalizations(expression.target)) {
+      return true;
+    }
+
+    // Check InstanceCreationExpression arguments
+    if (expression is InstanceCreationExpression) {
+      for (final arg in expression.argumentList.arguments) {
+        if (arg is NamedExpression) {
+          if (containsAppLocalizations(arg.expression)) return true;
+        } else {
+          // Positional arguments are Expression
+          if (containsAppLocalizations(arg)) return true;
+        }
+      }
+    }
+
+    // Check ListLiteral elements
+    if (expression is ListLiteral) {
+      for (final element in expression.elements) {
+        if (element is Expression) {
+          if (containsAppLocalizations(element)) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /// Checks if a MethodInvocation is AppLocalizations.of(context)
+  bool isAppLocalizationsCall(MethodInvocation node) {
+    // Check method name is "of"
+    if (node.methodName.name != 'of') return false;
+
+    // Check target is AppLocalizations
+    Expression? target = node.target;
+
+    if (target is PrefixedIdentifier) {
+      return target.identifier.name == 'AppLocalizations';
+    } else if (target is SimpleIdentifier) {
+      return target.name == 'AppLocalizations';
+    }
+
+    // If target is null, check if the node is part of a property access
+    // like: AppLocalizations.of(context)!.someProperty
+    if (target == null) {
+      final parent = node.parent;
+      if (parent is PropertyAccess) {
+        final parentTarget = parent.target;
+        if (parentTarget is MethodInvocation) {
+          // This might be the case, but we're already checking this node
+          // So check if parent's target is AppLocalizations
+          return isAppLocalizationsCall(parentTarget);
+        }
+      }
+    }
+
+    // Fallback: check the source code representation
+    // This handles cases where AST structure might be different
+    try {
+      final source = node.toString();
+      if (source.contains('AppLocalizations.of')) {
+        return true;
+      }
+    } catch (e) {
+      // If toString fails, continue with other checks
+    }
+
+    return false;
+  }
+}
+
+class _TextWithPlaceholders {
+  final String text;
+  final List<String> placeholders;
+  const _TextWithPlaceholders(this.text, this.placeholders);
 }
 
 /// AST Visitor to find text strings in Flutter widgets
@@ -200,60 +387,188 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
     super.visitInstanceCreationExpression(node);
   }
 
+  @override
+  void visitMethodInvocation(MethodInvocation node) {
+    // Check if this is a builder method (like _buildActionButton, buildButton, etc.)
+    final methodName = node.methodName.name;
+
+    // Check if method name suggests it's a widget builder method
+    if (_isBuilderMethod(methodName)) {
+      // Extract text from method arguments
+      _extractTextFromArguments(node.argumentList, methodName);
+    }
+
+    super.visitMethodInvocation(node);
+  }
+
+  bool _isBuilderMethod(String methodName) {
+    // Common patterns for builder methods
+    final builderPatterns = [
+      RegExp(r'^_?build[A-Z]'), // _buildActionButton, buildButton, etc.
+      RegExp(r'^_?create[A-Z]'), // _createButton, createWidget, etc.
+      RegExp(r'^_?make[A-Z]'), // _makeButton, makeWidget, etc.
+      RegExp(r'^_?get[A-Z].*Widget$'), // _getActionWidget, etc.
+    ];
+
+    return builderPatterns.any((pattern) => pattern.hasMatch(methodName));
+  }
+
   void _extractTextFromArguments(ArgumentList argumentList, String widgetType) {
     for (final argument in argumentList.arguments) {
-      if (argument is SimpleStringLiteral) {
-        final text = argument.value;
-
-        // Skip empty strings and very short strings
-        if (text.isEmpty || text.length < 2) continue;
-
-        // Skip strings that look like technical values (URLs, IDs, etc.)
-        if (_isTechnicalString(text)) continue;
-
-        final location = argument.offset;
-        final lineLocation = lineInfo.getLocation(location);
-
-        final extractedText = ExtractedText(
-          text: text,
-          filePath: filePath,
-          offset: location,
-          line: lineLocation?.lineNumber ?? 0,
-          column: lineLocation?.columnNumber ?? 0,
-          widgetType: widgetType,
-          generatedId: '', // Will be generated later
-        );
-
-        extractedTexts.add(extractedText);
-      } else if (argument is NamedExpression) {
+      if (argument is NamedExpression) {
         // Check named arguments like title:, label:, tooltip:, etc.
         final argumentName = argument.name.label.name;
         if (_isTextParameter(argumentName)) {
-          if (argument.expression is SimpleStringLiteral) {
-            final stringLiteral = argument.expression as SimpleStringLiteral;
-            final text = stringLiteral.value;
-
-            if (text.isEmpty || text.length < 2) continue;
-            if (_isTechnicalString(text)) continue;
-
-            final location = stringLiteral.offset;
-            final lineLocation = lineInfo.getLocation(location);
-
-            final extractedText = ExtractedText(
-              text: text,
-              filePath: filePath,
-              offset: location,
-              line: lineLocation?.lineNumber ?? 0,
-              column: lineLocation?.columnNumber ?? 0,
-              widgetType: '$widgetType.$argumentName',
-              generatedId: '',
-            );
-
-            extractedTexts.add(extractedText);
-          }
+          _extractTextFromExpression(
+            argument.expression,
+            '$widgetType.$argumentName',
+          );
         }
+      } else {
+        _extractTextFromExpression(argument, widgetType);
       }
     }
+  }
+
+  void _extractTextFromExpression(Expression expression, String widgetType) {
+    if (expression is ParenthesizedExpression) {
+      _extractTextFromExpression(expression.expression, widgetType);
+      return;
+    }
+
+    if (expression is ConditionalExpression) {
+      _extractTextFromExpression(expression.thenExpression, widgetType);
+      _extractTextFromExpression(expression.elseExpression, widgetType);
+      return;
+    }
+
+    final textWithArgs = _expressionToTextWithPlaceholders(expression);
+    if (textWithArgs == null) {
+      return;
+    }
+
+    _addExtractedText(
+      textWithArgs.text,
+      expression.offset,
+      expression.length,
+      widgetType,
+      placeholders: textWithArgs.placeholders,
+    );
+  }
+
+  String? _expressionToText(Expression expression) {
+    if (expression is SimpleStringLiteral) {
+      return expression.value;
+    }
+
+    if (expression is AdjacentStrings) {
+      final buffer = StringBuffer();
+      for (final stringLiteral in expression.strings) {
+        final part = _expressionToText(stringLiteral);
+        if (part == null) {
+          return null;
+        }
+        buffer.write(part);
+      }
+      return buffer.toString();
+    }
+
+    if (expression is StringInterpolation) {
+      return _stringInterpolationToText(expression);
+    }
+
+    if (expression is BinaryExpression &&
+        expression.operator.type == TokenType.PLUS) {
+      final left = _expressionToText(expression.leftOperand);
+      final right = _expressionToText(expression.rightOperand);
+      if (left == null || right == null) {
+        return null;
+      }
+      return left + right;
+    }
+
+    if (expression is ParenthesizedExpression) {
+      return _expressionToText(expression.expression);
+    }
+
+    if (expression is StringLiteral) {
+      // Covers other string literal types if introduced in future.
+      return expression.stringValue;
+    }
+
+    return null;
+  }
+
+  _TextWithPlaceholders? _expressionToTextWithPlaceholders(
+      Expression expression) {
+    if (expression is StringInterpolation) {
+      final parts = _interpolationToTextAndArgs(expression);
+      return parts;
+    }
+    final text = _expressionToText(expression);
+    if (text == null) return null;
+    return _TextWithPlaceholders(text, const []);
+  }
+
+  String _stringInterpolationToText(StringInterpolation interpolation) {
+    final buffer = StringBuffer();
+
+    for (final element in interpolation.elements) {
+      if (element is InterpolationString) {
+        buffer.write(element.value);
+      } else if (element is InterpolationExpression) {
+        buffer.write(_expressionToPlaceholder(element.expression));
+      }
+    }
+
+    return buffer.toString();
+  }
+
+  _TextWithPlaceholders _interpolationToTextAndArgs(
+      StringInterpolation interpolation) {
+    final buffer = StringBuffer();
+    final args = <String>[];
+    for (final element in interpolation.elements) {
+      if (element is InterpolationString) {
+        buffer.write(element.value);
+      } else if (element is InterpolationExpression) {
+        buffer.write(_expressionToPlaceholder(element.expression));
+        args.add(element.expression.toSource());
+      }
+    }
+    return _TextWithPlaceholders(buffer.toString(), args);
+  }
+
+  String _expressionToPlaceholder(Expression expression) {
+    // Use a generic placeholder to keep keys clean and stable
+    return '{value}';
+  }
+
+  void _addExtractedText(
+    String text,
+    int offset,
+    int length,
+    String widgetType, {
+    List<String> placeholders = const [],
+  }) {
+    if (text.isEmpty || text.length < 2) return;
+    if (_isTechnicalString(text)) return;
+
+    final lineLocation = lineInfo.getLocation(offset);
+
+    final extractedText = ExtractedText(
+      text: text,
+      filePath: filePath,
+      offset: offset,
+      length: length,
+      line: lineLocation?.lineNumber ?? 0,
+      column: lineLocation?.columnNumber ?? 0,
+      widgetType: widgetType,
+      generatedId: '',
+      placeholders: placeholders,
+    );
+
+    extractedTexts.add(extractedText);
   }
 
   bool _isTextParameter(String paramName) {
@@ -290,4 +605,113 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
 
     return technicalPatterns.any((pattern) => pattern.hasMatch(text));
   }
+}
+
+/// AST Visitor to find and remove const keywords from widgets with AppLocalizations
+class _ConstRemovalVisitor extends RecursiveAstVisitor<void> {
+  final lineInfo;
+  final TextExtractor extractor;
+  final Set<_ConstRemovalRange> constRemovalRanges = {};
+  final List<InstanceCreationExpression> widgetStack = [];
+
+  _ConstRemovalVisitor(this.lineInfo, this.extractor);
+
+  @override
+  void visitInstanceCreationExpression(InstanceCreationExpression node) {
+    // Track widget hierarchy
+    widgetStack.add(node);
+
+    // Check if this widget has const keyword
+    final hasConst = node.keyword?.lexeme == 'const';
+
+    // Visit children first
+    super.visitInstanceCreationExpression(node);
+
+    // After visiting children, check if this widget or its subtree contains AppLocalizations
+    if (hasConst && _widgetOrSubtreeContainsAppLocalizations(node)) {
+      _markConstForRemoval(node);
+    }
+
+    widgetStack.removeLast();
+  }
+
+  /// Checks if a widget or any node in its subtree contains AppLocalizations
+  bool _widgetOrSubtreeContainsAppLocalizations(
+      InstanceCreationExpression node) {
+    // Use a checker visitor to scan the entire subtree
+    final checker = _AppLocalizationsChecker(extractor);
+    node.accept(checker);
+    return checker.found;
+  }
+
+  /// Marks a const keyword for removal
+  void _markConstForRemoval(InstanceCreationExpression node) {
+    final keyword = node.keyword;
+    if (keyword == null) return;
+
+    // Get the range of the const keyword
+    final offset = keyword.offset;
+    final length = keyword.length;
+    final endOffset = offset + length;
+
+    constRemovalRanges.add(_ConstRemovalRange(offset, endOffset));
+  }
+}
+
+/// Visitor to check if a subtree contains AppLocalizations
+class _AppLocalizationsChecker extends RecursiveAstVisitor<void> {
+  final TextExtractor extractor;
+  bool found = false;
+
+  _AppLocalizationsChecker(this.extractor);
+
+  @override
+  void visitMethodInvocation(MethodInvocation node) {
+    if (found) return; // Early exit if already found
+    if (extractor.isAppLocalizationsCall(node)) {
+      found = true;
+      return;
+    }
+    super.visitMethodInvocation(node);
+  }
+
+  @override
+  void visitPropertyAccess(PropertyAccess node) {
+    if (found) return;
+    // Check if target is AppLocalizations.of(context)!
+    final target = node.target;
+    if (target is MethodInvocation &&
+        extractor.isAppLocalizationsCall(target)) {
+      found = true;
+      return;
+    }
+    if (target is PostfixExpression) {
+      final operand = target.operand;
+      if (operand is MethodInvocation &&
+          extractor.isAppLocalizationsCall(operand)) {
+        found = true;
+        return;
+      }
+    }
+    super.visitPropertyAccess(node);
+  }
+}
+
+/// Represents a range in source code where const keyword should be removed
+class _ConstRemovalRange {
+  final int start;
+  final int end;
+
+  _ConstRemovalRange(this.start, this.end);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is _ConstRemovalRange &&
+          runtimeType == other.runtimeType &&
+          start == other.start &&
+          end == other.end;
+
+  @override
+  int get hashCode => start.hashCode ^ end.hashCode;
 }

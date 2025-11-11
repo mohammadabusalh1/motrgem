@@ -58,33 +58,63 @@ class L10nManager {
     await arbManager.addTextsToArb(textsWithIds);
 
     int replacedCount = 0;
+    int constRemovedCount = 0;
     List<String> errors = [];
+    final modifiedFiles = <String>{};
 
     // Step 4: Replace in code if requested
     if (replaceInCode) {
       print('\n🔄 Replacing texts in code...');
 
-      for (final text in textsWithIds) {
-        try {
-          final success = await extractor.replaceTextByName(
-            text.filePath,
-            text,
-          );
+      // Group texts by file, and replace in reverse offset order per file
+      final textsByFile = <String, List<ExtractedText>>{};
+      for (final t in textsWithIds) {
+        textsByFile.putIfAbsent(t.filePath, () => []).add(t);
+      }
 
-          if (success) {
-            replacedCount++;
-            print(
-                '  ✅ Replaced in ${path.basename(text.filePath)}: "${text.text}"');
-          } else {
-            final error =
-                'Failed to replace in ${text.filePath}: "${text.text}"';
+      for (final entry in textsByFile.entries) {
+        final filePath = entry.key;
+        final items = entry.value..sort((a, b) => b.offset.compareTo(a.offset));
+        for (final text in items) {
+          try {
+            final success = await extractor.replaceTextByName(
+              text.filePath,
+              text,
+            );
+            if (success) {
+              replacedCount++;
+              modifiedFiles.add(text.filePath);
+              print(
+                  '  ✅ Replaced in ${path.basename(text.filePath)}: "${text.text}"');
+            } else {
+              final error =
+                  'Failed to replace in ${text.filePath}: "${text.text}"';
+              errors.add(error);
+              print('  ❌ $error');
+            }
+          } catch (e) {
+            final error = 'Error replacing in $filePath: $e';
             errors.add(error);
             print('  ❌ $error');
           }
-        } catch (e) {
-          final error = 'Error replacing in ${text.filePath}: $e';
-          errors.add(error);
-          print('  ❌ $error');
+        }
+      }
+
+      // Step 4.5: Remove const keywords from modified files
+      if (modifiedFiles.isNotEmpty) {
+        print(
+            '\n🔧 Removing const keywords from widgets with AppLocalizations...');
+        for (final filePath in modifiedFiles) {
+          try {
+            final removedCount = await extractor.removeConstKeywords(filePath);
+            if (removedCount > 0) {
+              constRemovedCount += removedCount;
+              print(
+                  '  ✅ Removed $removedCount const keyword(s) from ${path.basename(filePath)}');
+            }
+          } catch (e) {
+            print('  ⚠️  Could not remove const keywords from $filePath: $e');
+          }
         }
       }
 
@@ -105,6 +135,9 @@ class L10nManager {
     print('\n✨ Summary:');
     print('  - Texts extracted: ${textsWithIds.length}');
     print('  - Texts replaced: $replacedCount');
+    if (constRemovedCount > 0) {
+      print('  - Const keywords removed: $constRemovedCount');
+    }
     if (errors.isNotEmpty) {
       print('  - Errors: ${errors.length}');
     }
@@ -166,10 +199,12 @@ class L10nManager {
         text: text.text,
         filePath: text.filePath,
         offset: text.offset,
+        length: text.length,
         line: text.line,
         column: text.column,
         widgetType: text.widgetType,
         generatedId: uniqueId,
+        placeholders: text.placeholders,
       ));
     }
 

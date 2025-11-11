@@ -112,13 +112,20 @@ class ArbManager {
             print(
                 '  Translating ($translatedCount/$totalCount): "$originalText"');
 
+            // Mask ICU placeholders before translation to avoid being altered
+            final masked = _maskIcuPlaceholders(originalText);
+
             final translation = await translator.translate(
-              originalText,
+              masked.$1,
               from: 'en',
               to: locale,
             );
 
-            newContent[key] = translation.text;
+            // Restore placeholders after translation
+            final restored =
+                _restoreIcuPlaceholders(translation.text, masked.$2);
+
+            newContent[key] = restored;
             translatedCount++;
 
             // Add a small delay to avoid rate limiting
@@ -146,6 +153,38 @@ class ArbManager {
     await file.writeAsString(prettyJson);
 
     print('📄 Created locale file: $arbPath');
+  }
+
+  /// Replaces all ICU-like brace sections `{...}` with stable tokens to protect them during translation.
+  /// Returns a record of (maskedText, placeholders).
+  (String, List<String>) _maskIcuPlaceholders(String text) {
+    final placeholderPattern = RegExp(r'\{[^}]+\}');
+    final matches = placeholderPattern.allMatches(text).toList();
+    if (matches.isEmpty) return (text, const []);
+
+    // Collect originals in forward order
+    final originals = <String>[
+      for (final m in matches) text.substring(m.start, m.end)
+    ];
+
+    // Replace from last to first to keep indices valid
+    var masked = text;
+    for (var i = matches.length - 1; i >= 0; i--) {
+      final m = matches[i];
+      final token = '__PH_${i}__';
+      masked = masked.replaceRange(m.start, m.end, token);
+    }
+    return (masked, originals);
+  }
+
+  /// Restores previously masked placeholders back into the translated text.
+  String _restoreIcuPlaceholders(String translated, List<String> placeholders) {
+    var restored = translated;
+    for (var i = 0; i < placeholders.length; i++) {
+      final token = '__PH_${i}__';
+      restored = restored.replaceAll(token, placeholders[i]);
+    }
+    return restored;
   }
 
   /// Gets a human-readable language name for a locale code

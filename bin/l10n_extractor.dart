@@ -79,7 +79,7 @@ void main(List<String> arguments) async {
       dryRun: dryRun,
     );
 
-    print('\n━' * 50);
+    print('\n━' * 2);
 
     if (result.hasErrors) {
       print('⚠️  Completed with errors');
