@@ -18,6 +18,7 @@ class L10nManager {
   Future<L10nResult> processProject({
     bool replaceInCode = false,
     bool dryRun = false,
+    bool strictNullHandling = false,
   }) async {
     print('🔍 Extracting texts from project: $projectPath');
 
@@ -32,7 +33,8 @@ class L10nManager {
 
     // Step 1: Extract all texts. Candidates that matched a recognized
     // widget+parameter but couldn't be safely auto-replaced (no BuildContext
-    // resolvable in scope) are collected into `skippedTexts` instead of
+    // resolvable in scope, or a nullable interpolation under
+    // --strict-null-handling) are collected into `skippedTexts` instead of
     // being silently dropped.
     final skippedTexts = <PossibleHardcodedText>[];
     final extractedTexts = await extractor.extractTextFromProject(
@@ -40,6 +42,7 @@ class L10nManager {
       extraWidgets: config.extraWidgets,
       extraTextParams: config.extraTextParams,
       skipped: skippedTexts,
+      strictNullHandling: strictNullHandling,
     );
 
     // Report both sources together *before* the empty-extraction early
@@ -47,12 +50,24 @@ class L10nManager {
     // false "fully localized" signal.
     await _reportPossibleHardcodedTexts([...possibleTexts, ...skippedTexts]);
 
+    // --strict-null-handling skips are real errors — a nullable
+    // interpolation couldn't be safely auto-fixed — so they surface via
+    // L10nResult.hasErrors (and bin/motrgem.dart's exit(1)) rather than
+    // only showing up in the possible-hardcoded-text report.
+    final errors = <String>[
+      for (final skip in skippedTexts)
+        if (skip.category ==
+            PossibleHardcodedTextCategory.nullableExpressionStrict)
+          'Skipped (--strict-null-handling): ${skip.filePath}:${skip.line}:'
+              '${skip.column} - "${skip.text}"',
+    ];
+
     if (extractedTexts.isEmpty) {
       print('✅ No hardcoded texts found!');
       return L10nResult(
         extractedCount: 0,
         replacedCount: 0,
-        errors: [],
+        errors: errors,
       );
     }
 
@@ -74,7 +89,7 @@ class L10nManager {
       return L10nResult(
         extractedCount: textsWithIds.length,
         replacedCount: 0,
-        errors: [],
+        errors: errors,
       );
     }
 
@@ -84,7 +99,6 @@ class L10nManager {
 
     int replacedCount = 0;
     int constRemovedCount = 0;
-    List<String> errors = [];
     final modifiedFiles = <String>{};
 
     // Step 4: Replace in code if requested

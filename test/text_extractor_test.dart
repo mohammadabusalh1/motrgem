@@ -795,4 +795,79 @@ void useWidgets(BuildContext context) {
       expect(values, {'Bookings', 'Search bookings'});
     });
   });
+
+  group('nullable interpolation handling', () {
+    const nullableFixture = '''
+class Cooldown {
+  int? data;
+}
+
+class MyWidget {
+  Widget build(BuildContext context, Cooldown cooldown) {
+    return Text('Resend in \${cooldown.data}s');
+  }
+}
+''';
+
+    test('coerces a nullable interpolation to a non-null Object by default',
+        () async {
+      final projectPath = await _createProject(nullableFixture);
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final extractor = TextExtractor();
+      final texts = await extractor.extractTextFromProject(projectPath);
+
+      expect(texts, hasLength(1));
+      expect(texts.single.text, 'Resend in {value1}s');
+      expect(texts.single.placeholders, ["(cooldown.data)?.toString() ?? ''"]);
+    });
+
+    test(
+        '--strict-null-handling skips a nullable interpolation instead of '
+        'guessing at a fallback', () async {
+      final projectPath = await _createProject(nullableFixture);
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final extractor = TextExtractor();
+      final skipped = <PossibleHardcodedText>[];
+      final texts = await extractor.extractTextFromProject(
+        projectPath,
+        strictNullHandling: true,
+        skipped: skipped,
+      );
+
+      expect(texts, isEmpty);
+      expect(skipped, hasLength(1));
+      expect(
+        skipped.single.category,
+        PossibleHardcodedTextCategory.nullableExpressionStrict,
+      );
+    });
+
+    test('leaves a non-nullable interpolation unaffected in both modes',
+        () async {
+      final projectPath = await _createProject('''
+class MyWidget {
+  Widget build(BuildContext context) {
+    final int count = 5;
+    return Text('Total: \${count}');
+  }
+}
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final extractor = TextExtractor();
+
+      final defaultTexts = await extractor.extractTextFromProject(projectPath);
+      expect(defaultTexts, hasLength(1));
+      expect(defaultTexts.single.placeholders, ['count']);
+
+      final strictTexts = await extractor.extractTextFromProject(
+        projectPath,
+        strictNullHandling: true,
+      );
+      expect(strictTexts, hasLength(1));
+      expect(strictTexts.single.placeholders, ['count']);
+    });
+  });
 }

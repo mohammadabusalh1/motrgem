@@ -167,6 +167,22 @@ extra_text_params:
 Widgets configured this way are also excluded from the possible-hardcoded-text report, since
 they're now fully handled instead of merely flagged.
 
+## Nullable Interpolations
+
+When an interpolated expression has a nullable static type (e.g. `Text('Error: ${snapshot.error}')`
+where `snapshot.error` is `Object?`), `flutter gen-l10n` always types the generated ARB placeholder
+as a non-nullable `Object`, so a bare nullable argument would fail `flutter analyze`. By default
+motrgem coerces it at the call site instead of guessing at your app's copy:
+
+```dart
+AppLocalizations.of(context)!.errorMessage(snapshot.error?.toString() ?? '')
+```
+
+If you'd rather be alerted than have motrgem silently fall back to an empty string for a null
+value, pass `--strict-null-handling`: any nullable interpolation is skipped (reported the same way
+as other possible-hardcoded-text findings) and the run exits non-zero instead of applying the
+default coercion.
+
 ## Usage
 
 ### Initialize Project (First Time Setup)

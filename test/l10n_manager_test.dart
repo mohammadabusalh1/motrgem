@@ -189,6 +189,70 @@ class MyChart {
     });
 
     test(
+        'coerces a nullable interpolation by default so the rewritten call '
+        'site is analyzer-clean', () async {
+      final projectPath = await _createProject('''
+class Cooldown {
+  int? data;
+}
+
+class MyWidget {
+  Widget build(BuildContext context, Cooldown cooldown) {
+    return Text('Resend in \${cooldown.data}s');
+  }
+}
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final manager = L10nManager(projectPath);
+      final result = await manager.processProject(replaceInCode: true);
+
+      expect(result.hasErrors, isFalse);
+      expect(result.replacedCount, 1);
+
+      final content =
+          await File(path.join(projectPath, 'lib', 'main.dart'))
+              .readAsString();
+      expect(
+        content,
+        contains(
+          "AppLocalizations.of(context)!.resendInValueS((cooldown.data)?.toString() ?? '')",
+        ),
+      );
+    });
+
+    test(
+        '--strict-null-handling fails the run instead of coercing a '
+        'nullable interpolation', () async {
+      final projectPath = await _createProject('''
+class Cooldown {
+  int? data;
+}
+
+class MyWidget {
+  Widget build(BuildContext context, Cooldown cooldown) {
+    return Text('Resend in \${cooldown.data}s');
+  }
+}
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final manager = L10nManager(projectPath);
+      final result = await manager.processProject(
+        replaceInCode: true,
+        strictNullHandling: true,
+      );
+
+      expect(result.hasErrors, isTrue);
+      expect(result.replacedCount, 0);
+
+      final content =
+          await File(path.join(projectPath, 'lib', 'main.dart'))
+              .readAsString();
+      expect(content, isNot(contains('AppLocalizations')));
+    });
+
+    test(
         'motrgem.yaml extra_widgets makes a custom widget fully '
         'extracted/replaced instead of only reported', () async {
       final projectPath = await _createProject('''

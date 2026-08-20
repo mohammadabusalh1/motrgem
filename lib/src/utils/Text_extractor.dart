@@ -4,6 +4,7 @@ import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
+import 'package:analyzer/dart/element/nullability_suffix.dart';
 import 'package:path/path.dart' as path;
 
 class ExtractedText {
@@ -267,13 +268,21 @@ class TextExtractor {
   ///
   /// If [skipped] is provided, candidates that matched a recognized
   /// widget+parameter but couldn't be safely auto-replaced (no BuildContext
-  /// resolvable in scope) are appended to it instead of being silently
+  /// resolvable in scope, or a nullable interpolation under
+  /// [strictNullHandling]) are appended to it instead of being silently
   /// dropped, so callers can surface them in a report.
+  ///
+  /// [strictNullHandling] controls what happens to a string interpolation
+  /// whose expression has a nullable static type: by default it's coerced
+  /// to a non-null `Object` (`expr?.toString() ?? ''`) so the generated
+  /// call always compiles; when true, that candidate is skipped and
+  /// reported (in [skipped]) instead of guessing at a fallback.
   Future<List<ExtractedText>> extractTextFromProject(
     String projectPath, {
     Map<String, List<String>> extraWidgets = const {},
     Set<String> extraTextParams = const {},
     List<PossibleHardcodedText>? skipped,
+    bool strictNullHandling = false,
   }) async {
     final List<ExtractedText> extractedTexts = [];
     final libPath = _resolveLibPath(projectPath);
@@ -292,6 +301,7 @@ class TextExtractor {
         extraWidgets: extraWidgets.keys.toSet(),
         extraTextParams: mergedExtraParams,
         skipped: skipped,
+        strictNullHandling: strictNullHandling,
       );
       extractedTexts.addAll(texts);
     }
@@ -306,6 +316,7 @@ class TextExtractor {
     Set<String> extraWidgets = const {},
     Set<String> extraTextParams = const {},
     List<PossibleHardcodedText>? skipped,
+    bool strictNullHandling = false,
   }) async {
     final extractedTexts = <ExtractedText>[];
 
@@ -319,6 +330,7 @@ class TextExtractor {
           result.lineInfo,
           extraWidgets: extraWidgets,
           extraTextParams: extraTextParams,
+          strictNullHandling: strictNullHandling,
         );
         result.unit.visitChildren(visitor);
         extractedTexts.addAll(visitor.extractedTexts);
@@ -665,6 +677,17 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
   final Set<String> textWidgets;
   final Set<String> textParams;
 
+  /// When true, a string interpolation whose expression has a nullable
+  /// static type is never auto-coerced — the whole candidate is skipped and
+  /// reported (category nullableExpressionStrict) instead.
+  final bool strictNullHandling;
+
+  /// Set by _extractTextAndArgs when it bails out specifically because of
+  /// --strict-null-handling, so _extractTextFromExpression can tell that
+  /// apart from an expression that just isn't a string at all (which is
+  /// normal and shouldn't be reported).
+  bool _strictNullSkipped = false;
+
   // Common Flutter widgets that contain text
   static const _builtinTextWidgets = {
     'Text',
@@ -704,6 +727,7 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
     this.lineInfo, {
     Set<String> extraWidgets = const {},
     Set<String> extraTextParams = const {},
+    this.strictNullHandling = false,
   })  : textWidgets = {..._builtinTextWidgets, ...extraWidgets},
         textParams = {..._builtinTextParams, ...extraTextParams};
 
@@ -773,8 +797,20 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
       return;
     }
 
+    _strictNullSkipped = false;
     final textWithArgs = _expressionToTextWithPlaceholders(expression);
     if (textWithArgs == null) {
+      if (_strictNullSkipped) {
+        final lineLocation = lineInfo.getLocation(expression.offset);
+        skippedTexts.add(PossibleHardcodedText(
+          text: expression.toSource(),
+          filePath: filePath,
+          line: lineLocation?.lineNumber ?? 0,
+          column: lineLocation?.columnNumber ?? 0,
+          source: widgetType,
+          category: PossibleHardcodedTextCategory.nullableExpressionStrict,
+        ));
+      }
       return;
     }
 
@@ -826,7 +862,24 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
         if (element is InterpolationString) {
           buffer.write(element.value);
         } else if (element is InterpolationExpression) {
-          args.add(element.expression.toSource());
+          final source = element.expression.toSource();
+          final type = element.expression.staticType;
+          final isNullable =
+              type != null && type.nullabilitySuffix == NullabilitySuffix.question;
+
+          if (isNullable && strictNullHandling) {
+            // Can't prove this won't be null, and the caller asked us not
+            // to guess — bail out of the whole candidate so it gets
+            // reported instead of silently coerced.
+            _strictNullSkipped = true;
+            return null;
+          }
+
+          // ARB placeholders are always typed as non-nullable Object, so a
+          // nullable interpolation must be coerced to a non-null value or
+          // `flutter analyze` fails with "argument type 'X?' can't be
+          // assigned to the parameter type 'Object'".
+          args.add(isNullable ? "($source)?.toString() ?? ''" : source);
           buffer.write('{value${args.length}}');
         }
       }

@@ -1,3 +1,10 @@
+## 1.3.0
+
+- Fixed: `--replace` no longer emits `AppLocalizations.of(context)!...` inside a callback/method with no `BuildContext` actually resolvable in scope (e.g. an `fl_chart`-style `getTitlesWidget` callback, or a helper method that isn't `build(BuildContext context)`), which previously produced `Undefined name 'context'`. The call site now uses whichever BuildContext-typed identifier is genuinely in lexical scope (respecting closure capture — an inline closure inside `build` still resolves correctly — and using the parameter's real name, e.g. `ctx`, not a hardcoded `context`). Text with no BuildContext resolvable is reported instead of silently dropped or turned into broken code.
+- Added: string interpolations with a nullable static type (e.g. `Text('Error: ${snapshot.error}')`) are now coerced to a non-null `Object` at the call site by default (`expr?.toString() ?? ''`), fixing `flutter analyze` failures like `The argument type 'X?' can't be assigned to the parameter type 'Object'`. Pass `--strict-null-handling` to skip-and-report these instead of applying the default coercion.
+- Improved: the possible-hardcoded-text scan now skips named arguments that look like non-display data (`key`, `id`, `value`, `color`, `url`, `icon`, `route`, `type`, `code`, `tag`, `asset`, `path`) instead of flagging every string literal regardless of parameter name
+- Fixed: two remaining `--replace` progress lines (`Added import to X.dart`, `Removed N const keyword(s)...`) are now flushed immediately like the rest, so long runs redirected to a file don't appear to hang between them
+
 ## 1.2.0
 
 - Added: motrgem now scans for hardcoded-looking text it can't safely auto-fix — string args passed to your own custom widget/exception classes (e.g. `MyStatCard(label: ...)`, `throw AuthError(message: ...)`), strings inside `validator:` closures, and elements of `const`/plain `List<String>` variables — and reports them (console summary + `lib/l10n/possible_hardcoded_texts.txt`) on every `--dry-run`/`--replace` run instead of silently skipping them. Fixes the "clean run but the app isn't actually fully localized" false-completion problem.

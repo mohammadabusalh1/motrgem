@@ -31,6 +31,12 @@ void main(List<String> arguments) async {
       help: 'Perform a dry run without making changes',
       defaultsTo: false,
     )
+    ..addFlag(
+      'strict-null-handling',
+      help: 'Fail instead of auto-coercing a nullable string interpolation '
+          '(the default wraps it as expr?.toString() ?? \'\')',
+      defaultsTo: false,
+    )
     ..addOption(
       'add-locale',
       abbr: 'l',
@@ -54,6 +60,7 @@ void main(List<String> arguments) async {
     final projectPath = results['project'] as String;
     final replace = results['replace'] as bool;
     final dryRun = results['dry-run'] as bool;
+    final strictNullHandling = results['strict-null-handling'] as bool;
     final addLocale = results['add-locale'] as String?;
 
     // Validate project path
@@ -88,6 +95,7 @@ void main(List<String> arguments) async {
     final result = await manager.processProject(
       replaceInCode: replace,
       dryRun: dryRun,
+      strictNullHandling: strictNullHandling,
     );
 
     print('\n━' * 2);
