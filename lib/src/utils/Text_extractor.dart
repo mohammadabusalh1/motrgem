@@ -17,6 +17,12 @@ class ExtractedText {
   final String generatedId;
   final List<String> placeholders;
 
+  /// The expression to pass to `AppLocalizations.of(...)` at the call site —
+  /// almost always `'context'`, but can be a differently-named parameter
+  /// (e.g. `'ctx'`, or `'ctx!'` if it was declared nullable) when that's the
+  /// actual BuildContext-typed identifier resolvable in scope at [offset].
+  final String contextExpression;
+
   ExtractedText({
     required this.text,
     required this.filePath,
@@ -27,6 +33,7 @@ class ExtractedText {
     required this.widgetType,
     required this.generatedId,
     this.placeholders = const [],
+    this.contextExpression = 'context',
   });
 
   @override
@@ -45,6 +52,7 @@ class ExtractedText {
       'widgetType': widgetType,
       'generatedId': generatedId,
       'placeholders': placeholders,
+      'contextExpression': contextExpression,
     };
   }
 }
@@ -60,6 +68,16 @@ enum PossibleHardcodedTextCategory {
 
   /// A string literal element of a `const`/plain `List<String>` variable.
   constStringList,
+
+  /// Text that matched a recognized widget+parameter, but no BuildContext
+  /// was resolvable in lexical scope at that point, so it was never
+  /// auto-replaced (that would produce `Undefined name 'context'`).
+  noBuildContextInScope,
+
+  /// A string interpolation with a nullable static type, skipped because
+  /// --strict-null-handling was passed instead of applying the default
+  /// null-coercion fallback.
+  nullableExpressionStrict,
 }
 
 /// A string literal that looks like user-visible copy but sits outside the
@@ -121,6 +139,56 @@ bool _looksLikeNonDisplayParamName(String paramName) {
   );
   final words = spaced.toLowerCase().split(RegExp(r'[\s_]+'));
   return words.any(_nonDisplayParamWords.contains);
+}
+
+/// Walks up from [node] through enclosing FunctionExpression/MethodDeclaration/
+/// FunctionDeclaration/ConstructorDeclaration parameter lists looking for a
+/// parameter whose declared type is named `BuildContext`. Returns the
+/// expression to use at the call site (the parameter's name, `!`-suffixed if
+/// its declared type was nullable), or null if none is resolvable.
+///
+/// This is a pure syntactic scope walk (matches on the parameter's type
+/// *annotation* name, not a semantically-resolved type), which also mirrors
+/// Dart's real closure-capture semantics: a closure literal defined lexically
+/// inside `build(BuildContext context) { ... }` finds `context` by walking
+/// past its own (context-less) parameter list up to build's; a standalone
+/// method with no BuildContext parameter of its own — and no enclosing
+/// function-like scope that has one — correctly finds nothing, since a
+/// MethodDeclaration's parent is always a class/mixin/extension body, never
+/// another method, so the walk can't "leak" scope between sibling methods.
+String? resolveBuildContextExpression(AstNode node) {
+  AstNode? current = node.parent;
+  while (current != null) {
+    FormalParameterList? params;
+    if (current is FunctionExpression) {
+      params = current.parameters;
+    } else if (current is MethodDeclaration) {
+      params = current.parameters;
+    } else if (current is FunctionDeclaration) {
+      params = current.functionExpression.parameters;
+    } else if (current is ConstructorDeclaration) {
+      params = current.parameters;
+    }
+
+    if (params != null) {
+      for (final param in params.parameters) {
+        final normalParam =
+            param is DefaultFormalParameter ? param.parameter : param;
+        if (normalParam is SimpleFormalParameter) {
+          final type = normalParam.type;
+          if (type is NamedType && type.name2.lexeme == 'BuildContext') {
+            final name = normalParam.name?.lexeme;
+            if (name != null) {
+              return type.question != null ? '$name!' : name;
+            }
+          }
+        }
+      }
+    }
+
+    current = current.parent;
+  }
+  return null;
 }
 
 /// Extracts the literal text of a simple string expression (no placeholder
@@ -196,10 +264,16 @@ class TextExtractor {
   /// widget/parameter recognition (see `motrgem.yaml`'s `extra_widgets` and
   /// `extra_text_params`), so teams can opt their own design-system
   /// components into full extraction + replacement.
+  ///
+  /// If [skipped] is provided, candidates that matched a recognized
+  /// widget+parameter but couldn't be safely auto-replaced (no BuildContext
+  /// resolvable in scope) are appended to it instead of being silently
+  /// dropped, so callers can surface them in a report.
   Future<List<ExtractedText>> extractTextFromProject(
     String projectPath, {
     Map<String, List<String>> extraWidgets = const {},
     Set<String> extraTextParams = const {},
+    List<PossibleHardcodedText>? skipped,
   }) async {
     final List<ExtractedText> extractedTexts = [];
     final libPath = _resolveLibPath(projectPath);
@@ -217,6 +291,7 @@ class TextExtractor {
         collection,
         extraWidgets: extraWidgets.keys.toSet(),
         extraTextParams: mergedExtraParams,
+        skipped: skipped,
       );
       extractedTexts.addAll(texts);
     }
@@ -230,6 +305,7 @@ class TextExtractor {
     AnalysisContextCollection collection, {
     Set<String> extraWidgets = const {},
     Set<String> extraTextParams = const {},
+    List<PossibleHardcodedText>? skipped,
   }) async {
     final extractedTexts = <ExtractedText>[];
 
@@ -246,6 +322,7 @@ class TextExtractor {
         );
         result.unit.visitChildren(visitor);
         extractedTexts.addAll(visitor.extractedTexts);
+        skipped?.addAll(visitor.skippedTexts);
       }
     } catch (e) {
       print('Error analyzing file $filePath: $e');
@@ -267,9 +344,10 @@ class TextExtractor {
 
       String content = await file.readAsString();
       final args = extractedText.placeholders;
+      final ctx = extractedText.contextExpression;
       final replacement = args.isNotEmpty
-          ? 'AppLocalizations.of(context)!.${extractedText.generatedId}(${args.join(', ')})'
-          : 'AppLocalizations.of(context)!.${extractedText.generatedId}';
+          ? 'AppLocalizations.of($ctx)!.${extractedText.generatedId}(${args.join(', ')})'
+          : 'AppLocalizations.of($ctx)!.${extractedText.generatedId}';
       final start = extractedText.offset;
       final end = start + extractedText.length;
 
@@ -579,6 +657,11 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
   final lineInfo;
   final List<ExtractedText> extractedTexts = [];
 
+  /// Candidates that matched a recognized widget+parameter but couldn't be
+  /// safely auto-replaced (no BuildContext resolvable in scope), reported
+  /// separately instead of being silently dropped or emitting broken code.
+  final List<PossibleHardcodedText> skippedTexts = [];
+
   final Set<String> textWidgets;
   final Set<String> textParams;
 
@@ -700,6 +783,7 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
       expression.offset,
       expression.length,
       widgetType,
+      expression,
       placeholders: textWithArgs.placeholders,
     );
   }
@@ -775,24 +859,44 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
     String text,
     int offset,
     int length,
-    String widgetType, {
+    String widgetType,
+    AstNode node, {
     List<String> placeholders = const [],
   }) {
     if (text.isEmpty || text.length < 2) return;
     if (isTechnicalString(text)) return;
 
     final lineLocation = lineInfo.getLocation(offset);
+    final line = lineLocation?.lineNumber ?? 0;
+    final column = lineLocation?.columnNumber ?? 0;
+
+    final contextExpression = resolveBuildContextExpression(node);
+    if (contextExpression == null) {
+      // A recognized widget/parameter, but no BuildContext is resolvable in
+      // scope here — auto-replacing would emit `Undefined name 'context'`.
+      // Report it instead of silently dropping it or emitting broken code.
+      skippedTexts.add(PossibleHardcodedText(
+        text: text,
+        filePath: filePath,
+        line: line,
+        column: column,
+        source: widgetType,
+        category: PossibleHardcodedTextCategory.noBuildContextInScope,
+      ));
+      return;
+    }
 
     final extractedText = ExtractedText(
       text: text,
       filePath: filePath,
       offset: offset,
       length: length,
-      line: lineLocation?.lineNumber ?? 0,
-      column: lineLocation?.columnNumber ?? 0,
+      line: line,
+      column: column,
       widgetType: widgetType,
       generatedId: '',
       placeholders: placeholders,
+      contextExpression: contextExpression,
     );
 
     extractedTexts.add(extractedText);

@@ -23,18 +23,29 @@ class L10nManager {
 
     final config = await _loadMotrgemConfig();
 
-    // Step 0: report text that sits outside what auto-extraction covers
-    // (custom widgets, validator closures, const string lists) *before* the
-    // empty-extraction early return below, so a project with zero SDK-widget
-    // hits doesn't get a false "fully localized" signal.
-    await _reportPossibleHardcodedTexts(config.extraWidgets);
+    // Step 0: text that sits outside what auto-extraction covers (custom
+    // widgets, validator closures, const string lists).
+    final possibleTexts = await extractor.findPossibleHardcodedTexts(
+      projectPath,
+      extraWidgets: config.extraWidgets,
+    );
 
-    // Step 1: Extract all texts
+    // Step 1: Extract all texts. Candidates that matched a recognized
+    // widget+parameter but couldn't be safely auto-replaced (no BuildContext
+    // resolvable in scope) are collected into `skippedTexts` instead of
+    // being silently dropped.
+    final skippedTexts = <PossibleHardcodedText>[];
     final extractedTexts = await extractor.extractTextFromProject(
       projectPath,
       extraWidgets: config.extraWidgets,
       extraTextParams: config.extraTextParams,
+      skipped: skippedTexts,
     );
+
+    // Report both sources together *before* the empty-extraction early
+    // return below, so a project with zero SDK-widget hits doesn't get a
+    // false "fully localized" signal.
+    await _reportPossibleHardcodedTexts([...possibleTexts, ...skippedTexts]);
 
     if (extractedTexts.isEmpty) {
       print('✅ No hardcoded texts found!');
@@ -362,19 +373,17 @@ class L10nManager {
     }
   }
 
-  /// Scans for user-visible-looking text that auto-extraction can't safely
-  /// reach (custom widget/exception constructor args, `validator:` closures,
-  /// const string lists — see TextExtractor.findPossibleHardcodedTexts) and
-  /// reports it: a console summary plus the full list written to
-  /// lib/l10n/possible_hardcoded_texts.txt, so it's never silently skipped.
+  /// Reports user-visible-looking text that couldn't be safely auto-fixed —
+  /// merging findings from TextExtractor.findPossibleHardcodedTexts (custom
+  /// widget/exception constructor args, `validator:` closures, const string
+  /// lists) with anything extraction itself had to skip (no BuildContext
+  /// resolvable in scope; a nullable interpolation under
+  /// --strict-null-handling) — as a console summary plus the full list
+  /// written to lib/l10n/possible_hardcoded_texts.txt, so none of it is
+  /// ever silently dropped.
   Future<void> _reportPossibleHardcodedTexts(
-    Map<String, List<String>> extraWidgets,
+    List<PossibleHardcodedText> findings,
   ) async {
-    final findings = await extractor.findPossibleHardcodedTexts(
-      projectPath,
-      extraWidgets: extraWidgets,
-    );
-
     if (findings.isEmpty) return;
 
     print(

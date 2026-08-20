@@ -12,6 +12,8 @@ import 'package:test/test.dart';
 /// when `Text` resolves to an actual class, so these fixtures declare their
 /// own tiny widget stubs instead of depending on the Flutter SDK.
 const _widgetStubs = '''
+class BuildContext {}
+
 class Text {
   Text(String data);
 }
@@ -90,6 +92,7 @@ void main() {
         'widgetType': 'Text',
         'generatedId': 'hello',
         'placeholders': ['a'],
+        'contextExpression': 'context',
       });
     });
   });
@@ -129,7 +132,7 @@ void main() {
         'non-text-params/non-builder methods', () async {
       final projectPath = await _createProject('''
 class MyWidget {
-  Widget build() {
+  Widget build(BuildContext context) {
     return Column(children: [
       AppBar(title: 'App Title'),
       Tooltip(message: 'Tip text'),
@@ -194,7 +197,7 @@ class MyWidget {
         'parenthesized expressions', () async {
       final projectPath = await _createProject('''
 class MyWidget {
-  Widget build(bool isError) {
+  Widget build(BuildContext context, bool isError) {
     return Column(children: [
       Text(isError ? 'Error state' : 'OK state'),
       Text(('Wrapped text')),
@@ -218,7 +221,7 @@ class MyWidget {
         'format strings, and too-short strings)', () async {
       final projectPath = await _createProject('''
 class MyWidget {
-  Widget build() {
+  Widget build(BuildContext context) {
     return Column(children: [
       Text('https://example.com'),
       Text('MY_CONSTANT'),
@@ -244,7 +247,7 @@ class MyWidget {
     test('gives each distinct interpolation a unique placeholder', () async {
       final projectPath = await _createProject('''
 class MyWidget {
-  Widget build() {
+  Widget build(BuildContext context) {
     return Text('\${start} – \${end} (\${hours}h)');
   }
 }
@@ -265,7 +268,7 @@ class MyWidget {
         () async {
       final projectPath = await _createProject('''
 class MyWidget {
-  Widget build() {
+  Widget build(BuildContext context) {
     return Text(
       '\${start} – '
       '\${end} (\${hours}h)',
@@ -670,6 +673,102 @@ final singleName = ['OnlyOne'];
     });
   });
 
+  group('BuildContext scope resolution', () {
+    test(
+        'does not auto-extract text in a method with no BuildContext of its '
+        'own and no lexical relationship to build() (fl_chart-style '
+        'getTitlesWidget callback implemented as a separate method)',
+        () async {
+      final projectPath = await _createProject('''
+class MyChart {
+  Widget build(BuildContext context) {
+    return _getTitleWidget(1.0, 2.0);
+  }
+
+  Text _getTitleWidget(double value, double meta) {
+    return Text('\${value}/\${meta}');
+  }
+}
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final extractor = TextExtractor();
+      final skipped = <PossibleHardcodedText>[];
+      final texts = await extractor.extractTextFromProject(
+        projectPath,
+        skipped: skipped,
+      );
+
+      expect(texts, isEmpty);
+      expect(skipped, hasLength(1));
+      expect(
+        skipped.single.category,
+        PossibleHardcodedTextCategory.noBuildContextInScope,
+      );
+    });
+
+    test(
+        'still auto-extracts a closure literal defined inline inside '
+        'build(BuildContext context), even though the closure itself has '
+        'no context parameter, because Dart closures capture the '
+        'enclosing scope', () async {
+      final projectPath = await _createProject('''
+class AxisTitles {
+  AxisTitles({Text? Function(double, double)? getTitlesWidget});
+}
+
+class MyChart {
+  Widget build(BuildContext context) {
+    return AxisTitles(
+      getTitlesWidget: (value, meta) {
+        return Text('\${value}/\${meta}');
+      },
+    );
+  }
+}
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final extractor = TextExtractor();
+      final skipped = <PossibleHardcodedText>[];
+      final texts = await extractor.extractTextFromProject(
+        projectPath,
+        skipped: skipped,
+      );
+
+      expect(skipped, isEmpty);
+      expect(texts, hasLength(1));
+      expect(texts.single.contextExpression, 'context');
+    });
+
+    test(
+        'uses the actual name of the resolvable BuildContext parameter, '
+        'not a hardcoded "context" (including a `!` suffix when it was '
+        'declared nullable)', () async {
+      final projectPath = await _createProject('''
+class MyWidget {
+  Widget build(BuildContext ctx) {
+    return Text('Hello');
+  }
+}
+
+class MyNullableCtxWidget {
+  Widget build(BuildContext? ctx) {
+    return Text('World');
+  }
+}
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final extractor = TextExtractor();
+      final texts = await extractor.extractTextFromProject(projectPath);
+      final byText = {for (final t in texts) t.text: t.contextExpression};
+
+      expect(byText['Hello'], 'ctx');
+      expect(byText['World'], 'ctx!');
+    });
+  });
+
   group('extraWidgets / extraTextParams', () {
     test('extend normal extraction to team-configured sinks', () async {
       final projectPath = await _createProject('''
@@ -677,7 +776,7 @@ class MyStatCard {
   MyStatCard({String? label, String? placeholder});
 }
 
-void useWidgets() {
+void useWidgets(BuildContext context) {
   MyStatCard(label: 'Bookings', placeholder: 'Search bookings');
 }
 ''');

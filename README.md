@@ -123,14 +123,24 @@ reusable widgets, since it can't safely assume every call site has the same `Bui
 availability an SDK widget does. Real apps route a lot of copy through those custom widgets
 anyway (e.g. `MyStatCard(label: 'Bookings')` that internally does `Text(label)`), so instead of
 staying silent about it, every `--dry-run`/`--replace` run also **scans and reports** (without
-auto-fixing) three common patterns:
+auto-fixing) these patterns:
 
 - String arguments passed to a **locally-declared class constructor** motrgem doesn't recognize
   (covers custom widgets *and* custom exception/error classes, e.g. `throw AuthError(message:
-  'Your session has expired.')`)
+  'Your session has expired.')`) — arguments named like non-display data (`key`, `id`, `value`,
+  `color`, `url`, `icon`, `route`, `type`, `code`, `tag`, `asset`, `path`) are skipped
 - String literals inside a **`validator:` closure** (form-field validators)
 - Elements of a **`const`/plain `List<String>`** variable (e.g. `const kDaysOfWeek = ['Monday',
   ...]`)
+- Text that *does* match a recognized widget+parameter, but has **no `BuildContext` resolvable in
+  its lexical scope** (e.g. inside a callback like `getTitlesWidget: (value, meta) { ... }`, or a
+  helper method that isn't `build(BuildContext context)`) — auto-replacing this would emit
+  `Undefined name 'context'`, so it's reported instead of silently leaving broken code. Note that
+  a closure defined *inline inside* `build(BuildContext context)` still gets auto-replaced even
+  without its own `context` parameter, since Dart closures capture the enclosing scope; only
+  genuinely BuildContext-less scopes are reported. When a different-named context parameter (e.g.
+  `ctx`) is what's actually in scope, the generated call site correctly uses that name instead of
+  a hardcoded `context`.
 
 If anything is found, you'll see a console summary and a full list written to
 `lib/l10n/possible_hardcoded_texts.txt` — review it and either localize those spots by hand, or

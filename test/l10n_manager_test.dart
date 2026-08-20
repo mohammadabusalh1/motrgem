@@ -9,6 +9,8 @@ import 'package:test/test.dart';
 /// (see the note in text_extractor_test.dart for why these are needed
 /// instead of a real Flutter SDK dependency).
 const _widgetStubs = '''
+class BuildContext {}
+
 class Text {
   Text(String data);
 }
@@ -50,7 +52,7 @@ void build() {
     test('dry run extracts texts but writes nothing to disk', () async {
       final projectPath = await _createProject('''
 class MyWidget {
-  Widget build() {
+  Widget build(BuildContext context) {
     return Text('Hello world');
   }
 }
@@ -79,7 +81,7 @@ class MyWidget {
         'const, and adds the AppLocalizations import', () async {
       final projectPath = await _createProject('''
 class MyWidget {
-  Widget build() {
+  Widget build(BuildContext context) {
     return const Text('Continue');
   }
 }
@@ -151,6 +153,42 @@ void useWidgets() {
     });
 
     test(
+        'reports SDK-widget text with no BuildContext in scope instead of '
+        'emitting a broken AppLocalizations.of(context) call', () async {
+      final projectPath = await _createProject('''
+class MyChart {
+  Widget build(BuildContext context) {
+    return _getTitleWidget(1.0, 2.0);
+  }
+
+  Text _getTitleWidget(double value, double meta) {
+    return Text('\${value}/\${meta}');
+  }
+}
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final manager = L10nManager(projectPath);
+      final result = await manager.processProject(replaceInCode: true);
+
+      expect(result.extractedCount, 0);
+      expect(result.replacedCount, 0);
+
+      // The source is untouched — no broken AppLocalizations.of(context)
+      // call was emitted where `context` isn't actually in scope.
+      final content =
+          await File(path.join(projectPath, 'lib', 'main.dart'))
+              .readAsString();
+      expect(content, isNot(contains('AppLocalizations')));
+
+      final report = await File(
+        path.join(projectPath, 'lib', 'l10n', 'possible_hardcoded_texts.txt'),
+      ).readAsString();
+      expect(report, contains('noBuildContextInScope'));
+      expect(report, contains('{value1}/{value2}'));
+    });
+
+    test(
         'motrgem.yaml extra_widgets makes a custom widget fully '
         'extracted/replaced instead of only reported', () async {
       final projectPath = await _createProject('''
@@ -159,7 +197,7 @@ class MyStatCard {
 }
 
 class MyWidget {
-  Widget build() {
+  Widget build(BuildContext context) {
     return MyStatCard(label: 'Bookings');
   }
 }
@@ -198,7 +236,7 @@ extra_widgets:
         () async {
       final projectPath = await _createProject('''
 class MyWidget {
-  Widget build() {
+  Widget build(BuildContext context) {
     return Text('Hello world');
   }
 }
