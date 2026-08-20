@@ -544,6 +544,50 @@ void useWidgets() {
       );
     });
 
+    test(
+        'skips named args that look like non-display data (key/id/value/'
+        'color/url/...) — regression fixture from the StatCard bug report',
+        () async {
+      final projectPath = await _createProject('''
+class StatCard {
+  StatCard({
+    required String label,
+    String? subtitle,
+    String? key,
+    String? iconUrl,
+    String? routeKey,
+  });
+}
+
+void useWidgets() {
+  StatCard(
+    label: 'Bookings',
+    subtitle: 'Total bookings',
+    key: 'card-key',
+    iconUrl: 'https-not-even-technical-but-named-like-data',
+    routeKey: 'bookings-route',
+  );
+}
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final extractor = TextExtractor();
+      final findings = await extractor.findPossibleHardcodedTexts(projectPath);
+      final texts = findings.map((f) => f.text).toSet();
+
+      // Real display copy is still reported — --dry-run no longer silently
+      // implies full coverage for this widget.
+      expect(texts, containsAll(<String>['Bookings', 'Total bookings']));
+      // Params that look like non-display data are skipped, even though
+      // their values are plain string literals.
+      expect(texts, isNot(contains('card-key')));
+      expect(
+        texts,
+        isNot(contains('https-not-even-technical-but-named-like-data')),
+      );
+      expect(texts, isNot(contains('bookings-route')));
+    });
+
     test('excludes widgets explicitly configured as extra sinks', () async {
       final projectPath = await _createProject('''
 class MyStatCard {

@@ -103,6 +103,26 @@ bool isTechnicalString(String text) {
   return technicalPatterns.any((pattern) => pattern.hasMatch(text));
 }
 
+/// Named-parameter "words" (matched case-insensitively against each
+/// camelCase-split word of a parameter name) that indicate the argument is
+/// data, not display copy, so findPossibleHardcodedTexts shouldn't flag it —
+/// e.g. `key:`, `iconUrl:`, `routeKey:`.
+const _nonDisplayParamWords = {
+  'key', 'id', 'value', 'color', 'colour', 'url', 'uri', 'icon',
+  'route', 'type', 'code', 'tag', 'asset', 'path',
+};
+
+/// Whether [paramName] looks like it holds non-display data rather than
+/// user-visible copy, based on the words that make up its camelCase name.
+bool _looksLikeNonDisplayParamName(String paramName) {
+  final spaced = paramName.replaceAllMapped(
+    RegExp(r'([a-z0-9])([A-Z])'),
+    (m) => '${m[1]} ${m[2]}',
+  );
+  final words = spaced.toLowerCase().split(RegExp(r'[\s_]+'));
+  return words.any(_nonDisplayParamWords.contains);
+}
+
 /// Extracts the literal text of a simple string expression (no placeholder
 /// bookkeeping), or null if [expression] isn't a plain/interpolated string
 /// literal we can render as a single display string.
@@ -971,16 +991,21 @@ class _PossibleHardcodedTextVisitor extends RecursiveAstVisitor<void> {
     if (localClassNames.contains(typeName) &&
         !excludedTypeNames.contains(typeName)) {
       for (final argument in node.argumentList.arguments) {
-        final expression =
-            argument is NamedExpression ? argument.expression : argument;
-        final paramLabel = argument is NamedExpression
-            ? argument.name.label.name
-            : 'positional arg';
-        _checkStringExpression(
-          expression,
-          '$typeName.$paramLabel',
-          PossibleHardcodedTextCategory.customConstructorArg,
-        );
+        if (argument is NamedExpression) {
+          final paramName = argument.name.label.name;
+          if (_looksLikeNonDisplayParamName(paramName)) continue;
+          _checkStringExpression(
+            argument.expression,
+            '$typeName.$paramName',
+            PossibleHardcodedTextCategory.customConstructorArg,
+          );
+        } else {
+          _checkStringExpression(
+            argument,
+            '$typeName.positional arg',
+            PossibleHardcodedTextCategory.customConstructorArg,
+          );
+        }
       }
     }
 
