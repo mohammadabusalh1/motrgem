@@ -42,6 +42,7 @@ class L10nManager {
     print('\n📋 Extracted texts:');
     for (final text in textsWithIds) {
       print('  ${text.toString()}');
+      await stdout.flush();
     }
 
     if (dryRun) {
@@ -97,6 +98,7 @@ class L10nManager {
             errors.add(error);
             print('  ❌ $error');
           }
+          await stdout.flush();
         }
       }
 
@@ -120,7 +122,7 @@ class L10nManager {
 
       // Add import statement to files that were modified
       if (replacedCount > 0) {
-        await _addImportsToModifiedFiles(textsWithIds);
+        await _addImportsToModifiedFiles(modifiedFiles);
 
         // Configure MaterialApp for localization
         await _configureMaterialApp();
@@ -240,9 +242,7 @@ class L10nManager {
   }
 
   /// Adds necessary imports to modified files
-  Future<void> _addImportsToModifiedFiles(List<ExtractedText> texts) async {
-    final modifiedFiles = texts.map((t) => t.filePath).toSet();
-
+  Future<void> _addImportsToModifiedFiles(Set<String> modifiedFiles) async {
     // Get the package name from the project's pubspec.yaml
     final packageName = await _getPackageName();
     if (packageName == null) {
@@ -260,8 +260,13 @@ class L10nManager {
 
         // Check if import already exists
         if (!content.contains('/l10n/app_localizations.dart')) {
-          // Find the position after the last import
-          final importRegex = RegExp(r"import '[^']+';");
+          // Find the position after the last import. Matches both quote
+          // styles and combinator clauses (as/show/hide) so imports like
+          // `import 'package:app/models.dart' as models;` are not skipped,
+          // which would otherwise misplace the insertion point.
+          final importRegex = RegExp(
+            r'''import\s+['"][^'"]+['"](?:\s+(?:as\s+\w+|show\s+[\w,\s]+|hide\s+[\w,\s]+))*\s*;''',
+          );
           final matches = importRegex.allMatches(content).toList();
 
           if (matches.isNotEmpty) {
@@ -272,8 +277,18 @@ class L10nManager {
                 "\n$importStatement" +
                 content.substring(insertPosition);
           } else {
-            // No imports found, add at the beginning
-            content = "$importStatement\n" + content;
+            // No imports found. Insert after any leading library/part-of
+            // directive (which must appear before imports) instead of
+            // unconditionally at the very start of the file.
+            final directiveRegex = RegExp(
+              r'^\s*(?:library\s+[^;]*;|part\s+of\s+[^;]*;)\s*',
+            );
+            final directiveMatch = directiveRegex.matchAsPrefix(content);
+            final insertPosition = directiveMatch?.end ?? 0;
+
+            content = content.substring(0, insertPosition) +
+                "$importStatement\n" +
+                content.substring(insertPosition);
           }
 
           await file.writeAsString(content);

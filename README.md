@@ -53,6 +53,39 @@ flutter pub get
 - **Global install**: `motrgem start`, `motrgem --replace`
 - **Dev dependency**: `dart run motrgem start`, `dart run motrgem --replace`
 
+## 🤖 AI Prompt
+
+Using an AI coding assistant (Claude Code, Cursor, Copilot Chat, etc.) in your Flutter project? Paste this prompt in and it will drive `motrgem` for you correctly, including the manual review steps the CLI can't do on its own:
+
+```
+This Flutter project should use the `motrgem` package to extract hardcoded
+text into Flutter's l10n system. Please:
+
+1. Add it as a dev dependency: `flutter pub add dev:motrgem`
+2. If the project has no `l10n.yaml` / `lib/l10n` yet, run:
+   `dart run motrgem start`
+3. Run `dart run motrgem --dry-run` and show me what would be extracted
+   before changing anything.
+4. If I approve, run `dart run motrgem --replace` to extract the strings,
+   update `lib/l10n/app_en.arb`, and rewrite the call sites.
+5. After that finishes, run `flutter analyze` and fix anything it flags,
+   in particular:
+   - any remaining `const` on a widget that now calls
+     `AppLocalizations.of(context)!.xxx` (remove the `const`)
+   - any file missing the
+     `import 'package:<package_name>/l10n/app_localizations.dart';` import
+   - any ARB entry with `{value1}`/`{value2}`-style placeholders that needs
+     its generated method call reviewed for correct argument order
+6. Run `flutter gen-l10n` (or `flutter pub get`) to regenerate
+   `AppLocalizations`, and confirm the app still builds.
+7. Ask me which locales to add, then run
+   `dart run motrgem --add-locale <code>` for each one and tell me to
+   review the machine translations in `lib/l10n/app_<code>.arb` before
+   shipping.
+
+Do not hand-write translations yourself — only use motrgem's ARB output.
+```
+
 ## Features
 
 This project includes a powerful **L10n Text Extractor** library that automatically:
@@ -358,7 +391,7 @@ lib/
         └── l10n_manager.dart         # Workflow orchestration
 
 bin/
-└── l10n_extractor.dart               # CLI tool
+└── motrgem.dart                       # CLI tool
 
 l10n.yaml                             # L10n configuration
 ```
@@ -409,8 +442,8 @@ final result = await manager.processProject(replaceInCode: true);
 
 📝 Next steps:
   1. Run: flutter pub get
-  2. Run: dart run bin/l10n_extractor.dart --dry-run
-  3. Run: dart run bin/l10n_extractor.dart --replace
+  2. Run: dart run motrgem --dry-run
+  3. Run: dart run motrgem --replace
 ```
 
 ### Extract Command
@@ -472,7 +505,7 @@ When the same base ID would be generated multiple times, the library automatical
 ### Running Tests
 
 ```bash
-flutter test
+dart test
 ```
 
 ### Adding New Widget Support

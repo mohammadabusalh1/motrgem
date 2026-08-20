@@ -52,6 +52,18 @@ class ExtractedText {
 class TextExtractor {
   TextExtractor();
 
+  /// Dart words that cannot be used as identifiers. Includes the
+  /// unconditionally-reserved words plus the limited-reserved async words
+  /// (async/await/yield), which we avoid defensively even though they're
+  /// only reserved inside async/generator function bodies.
+  static const Set<String> _dartReservedWords = {
+    'assert', 'break', 'case', 'catch', 'class', 'const', 'continue',
+    'default', 'do', 'else', 'enum', 'extends', 'false', 'final', 'finally',
+    'for', 'if', 'in', 'is', 'new', 'null', 'rethrow', 'return', 'super',
+    'switch', 'this', 'throw', 'true', 'try', 'var', 'void', 'while', 'with',
+    'async', 'await', 'yield',
+  };
+
   /// Extracts all hardcoded text strings from Flutter widget files in the project
   Future<List<ExtractedText>> extractTextFromProject(String projectPath) async {
     final List<ExtractedText> extractedTexts = [];
@@ -170,6 +182,11 @@ class TextExtractor {
     // Ensure ID is not empty and doesn't start with number
     if (id.isEmpty || RegExp(r'^\d').hasMatch(id)) {
       id = 'text$id';
+    }
+
+    // Avoid Dart reserved words (e.g. "continue" -> "continueLabel")
+    if (_dartReservedWords.contains(id)) {
+      id = '${id}Label';
     }
 
     return id;
@@ -456,7 +473,22 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
     );
   }
 
-  String? _expressionToText(Expression expression) {
+  _TextWithPlaceholders? _expressionToTextWithPlaceholders(
+      Expression expression) {
+    final args = <String>[];
+    final text = _extractTextAndArgs(expression, args);
+    if (text == null) return null;
+    return _TextWithPlaceholders(text, args);
+  }
+
+  /// Recursively extracts the literal text of [expression], collecting every
+  /// distinct interpolated expression's source (in left-to-right order) into
+  /// [args] and emitting a uniquely-numbered `{valueN}` placeholder for each
+  /// one. The same [args] accumulator is threaded through nested
+  /// AdjacentStrings/BinaryExpression parts so numbering stays consistent
+  /// (and no interpolated expression is ever dropped) across multi-part
+  /// string literals such as `'${a} – ' '${b} (${c}h)'`.
+  String? _extractTextAndArgs(Expression expression, List<String> args) {
     if (expression is SimpleStringLiteral) {
       return expression.value;
     }
@@ -464,7 +496,7 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
     if (expression is AdjacentStrings) {
       final buffer = StringBuffer();
       for (final stringLiteral in expression.strings) {
-        final part = _expressionToText(stringLiteral);
+        final part = _extractTextAndArgs(stringLiteral, args);
         if (part == null) {
           return null;
         }
@@ -474,13 +506,22 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
     }
 
     if (expression is StringInterpolation) {
-      return _stringInterpolationToText(expression);
+      final buffer = StringBuffer();
+      for (final element in expression.elements) {
+        if (element is InterpolationString) {
+          buffer.write(element.value);
+        } else if (element is InterpolationExpression) {
+          args.add(element.expression.toSource());
+          buffer.write('{value${args.length}}');
+        }
+      }
+      return buffer.toString();
     }
 
     if (expression is BinaryExpression &&
         expression.operator.type == TokenType.PLUS) {
-      final left = _expressionToText(expression.leftOperand);
-      final right = _expressionToText(expression.rightOperand);
+      final left = _extractTextAndArgs(expression.leftOperand, args);
+      final right = _extractTextAndArgs(expression.rightOperand, args);
       if (left == null || right == null) {
         return null;
       }
@@ -488,7 +529,7 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
     }
 
     if (expression is ParenthesizedExpression) {
-      return _expressionToText(expression.expression);
+      return _extractTextAndArgs(expression.expression, args);
     }
 
     if (expression is StringLiteral) {
@@ -497,51 +538,6 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
     }
 
     return null;
-  }
-
-  _TextWithPlaceholders? _expressionToTextWithPlaceholders(
-      Expression expression) {
-    if (expression is StringInterpolation) {
-      final parts = _interpolationToTextAndArgs(expression);
-      return parts;
-    }
-    final text = _expressionToText(expression);
-    if (text == null) return null;
-    return _TextWithPlaceholders(text, const []);
-  }
-
-  String _stringInterpolationToText(StringInterpolation interpolation) {
-    final buffer = StringBuffer();
-
-    for (final element in interpolation.elements) {
-      if (element is InterpolationString) {
-        buffer.write(element.value);
-      } else if (element is InterpolationExpression) {
-        buffer.write(_expressionToPlaceholder(element.expression));
-      }
-    }
-
-    return buffer.toString();
-  }
-
-  _TextWithPlaceholders _interpolationToTextAndArgs(
-      StringInterpolation interpolation) {
-    final buffer = StringBuffer();
-    final args = <String>[];
-    for (final element in interpolation.elements) {
-      if (element is InterpolationString) {
-        buffer.write(element.value);
-      } else if (element is InterpolationExpression) {
-        buffer.write(_expressionToPlaceholder(element.expression));
-        args.add(element.expression.toSource());
-      }
-    }
-    return _TextWithPlaceholders(buffer.toString(), args);
-  }
-
-  String _expressionToPlaceholder(Expression expression) {
-    // Use a generic placeholder to keep keys clean and stable
-    return '{value}';
   }
 
   void _addExtractedText(
@@ -635,9 +631,36 @@ class _ConstRemovalVisitor extends RecursiveAstVisitor<void> {
     widgetStack.removeLast();
   }
 
+  @override
+  void visitListLiteral(ListLiteral node) {
+    final hasConst = node.constKeyword?.lexeme == 'const';
+
+    super.visitListLiteral(node);
+
+    if (hasConst && _subtreeContainsAppLocalizations(node)) {
+      _markConstTokenForRemoval(node.constKeyword);
+    }
+  }
+
+  @override
+  void visitSetOrMapLiteral(SetOrMapLiteral node) {
+    final hasConst = node.constKeyword?.lexeme == 'const';
+
+    super.visitSetOrMapLiteral(node);
+
+    if (hasConst && _subtreeContainsAppLocalizations(node)) {
+      _markConstTokenForRemoval(node.constKeyword);
+    }
+  }
+
   /// Checks if a widget or any node in its subtree contains AppLocalizations
   bool _widgetOrSubtreeContainsAppLocalizations(
       InstanceCreationExpression node) {
+    return _subtreeContainsAppLocalizations(node);
+  }
+
+  /// Checks if any node in [node]'s subtree contains AppLocalizations
+  bool _subtreeContainsAppLocalizations(AstNode node) {
     // Use a checker visitor to scan the entire subtree
     final checker = _AppLocalizationsChecker(extractor);
     node.accept(checker);
@@ -646,7 +669,11 @@ class _ConstRemovalVisitor extends RecursiveAstVisitor<void> {
 
   /// Marks a const keyword for removal
   void _markConstForRemoval(InstanceCreationExpression node) {
-    final keyword = node.keyword;
+    _markConstTokenForRemoval(node.keyword);
+  }
+
+  /// Marks the given const [keyword] token for removal
+  void _markConstTokenForRemoval(Token? keyword) {
     if (keyword == null) return;
 
     // Get the range of the const keyword

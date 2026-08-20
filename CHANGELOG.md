@@ -1,3 +1,14 @@
+## 1.1.2
+
+- Fixed: generated ARB/AppLocalizations ids that collided with Dart reserved words (e.g. `continue`, `new`, `default`) now get a safe suffix (`continueLabel`) instead of producing invalid Dart
+- Fixed: strings with multiple `${...}` interpolations now get uniquely-named placeholders (`value1`, `value2`, ...) instead of all colliding on the same name, and the ARB entry now includes a matching `placeholders` metadata block
+- Fixed: interpolated expressions spread across adjacent string-literal parts (e.g. multi-line concatenated strings) are no longer dropped — every argument is now collected and passed at the call site
+- Fixed: `--replace` now creates `lib/l10n/` automatically if it doesn't exist yet, instead of crashing when the project hasn't been initialized with `start` first
+- Improved: the `AppLocalizations` import inserter now recognizes imports with `as`/`show`/`hide` combinators and both quote styles, and correctly respects the actually-modified file set
+- Improved: `const` keyword removal now also covers `const [...]` and `const {...}` collection literals (e.g. `items: const [DropdownMenuItem(...)]`), not just widget constructors
+- Improved: progress output during `--replace` and `--add-locale` is now flushed immediately so long runs don't appear to hang when output is redirected to a file or pipe
+- Added a `test/` suite covering the extraction, ARB, orchestration, and project-init code paths
+
 ## 1.0.6
 
 - Fixed duplicate text entries in ARB files

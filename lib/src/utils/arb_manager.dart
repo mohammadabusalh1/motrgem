@@ -19,6 +19,7 @@ class ArbManager {
   Future<void> addTextsToArb(List<ExtractedText> texts) async {
     final arbPath = path.join(projectPath, arbDirectory, templateFileName);
     final file = File(arbPath);
+    await file.parent.create(recursive: true);
 
     // Read existing ARB content
     Map<String, dynamic> arbContent = {};
@@ -38,6 +39,11 @@ class ArbManager {
         arbContent['@${text.generatedId}'] = {
           'description':
               'Text from ${text.widgetType} in ${path.basename(text.filePath)}',
+          if (text.placeholders.isNotEmpty)
+            'placeholders': {
+              for (var i = 0; i < text.placeholders.length; i++)
+                'value${i + 1}': {},
+            },
         };
       }
     }
@@ -108,9 +114,11 @@ class ArbManager {
           final originalText = arbContent[key] as String;
 
           try {
-            // Show progress
+            // Show progress (flush so it's visible immediately even when
+            // stdout is redirected to a file/pipe rather than a TTY)
             print(
                 '  Translating ($translatedCount/$totalCount): "$originalText"');
+            await stdout.flush();
 
             // Mask ICU placeholders before translation to avoid being altered
             final masked = _maskIcuPlaceholders(originalText);
