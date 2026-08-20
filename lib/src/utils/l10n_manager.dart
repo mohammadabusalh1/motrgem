@@ -130,6 +130,7 @@ class L10nManager {
           } catch (e) {
             print('  ⚠️  Could not remove const keywords from $filePath: $e');
           }
+          await stdout.flush();
         }
       }
 
@@ -310,6 +311,7 @@ class L10nManager {
       } catch (e) {
         print('  ⚠️  Could not add import to $filePath: $e');
       }
+      await stdout.flush();
     }
   }
 
