@@ -78,7 +78,13 @@ text into Flutter's l10n system. Please:
      its generated method call reviewed for correct argument order
 6. Run `flutter gen-l10n` (or `flutter pub get`) to regenerate
    `AppLocalizations`, and confirm the app still builds.
-7. Ask me which locales to add, then run
+7. Check `lib/l10n/possible_hardcoded_texts.txt` (motrgem writes it whenever
+   it finds text it couldn't safely auto-fix: custom-widget/exception
+   constructor args, `validator:` closures, const string lists). For each
+   entry, either localize it by hand or add it to `motrgem.yaml`'s
+   `extra_widgets`/`extra_text_params` so future runs handle it
+   automatically, then re-run `dart run motrgem --replace`.
+8. Ask me which locales to add, then run
    `dart run motrgem --add-locale <code>` for each one and tell me to
    review the machine translations in `lib/l10n/app_<code>.arb` before
    shipping.
@@ -109,6 +115,47 @@ The library extracts text from these common Flutter widgets:
 - `SnackBar`, `AlertDialog`
 - `ListTile`, `Chip`
 - `InputDecoration` (with parameters like `hintText`, `labelText`, etc.)
+
+## Beyond SDK Widgets: Possible Hardcoded Text & Custom Sinks
+
+Auto-extraction only ever touches the SDK widgets/parameters above — it never rewrites your own
+reusable widgets, since it can't safely assume every call site has the same `BuildContext`
+availability an SDK widget does. Real apps route a lot of copy through those custom widgets
+anyway (e.g. `MyStatCard(label: 'Bookings')` that internally does `Text(label)`), so instead of
+staying silent about it, every `--dry-run`/`--replace` run also **scans and reports** (without
+auto-fixing) three common patterns:
+
+- String arguments passed to a **locally-declared class constructor** motrgem doesn't recognize
+  (covers custom widgets *and* custom exception/error classes, e.g. `throw AuthError(message:
+  'Your session has expired.')`)
+- String literals inside a **`validator:` closure** (form-field validators)
+- Elements of a **`const`/plain `List<String>`** variable (e.g. `const kDaysOfWeek = ['Monday',
+  ...]`)
+
+If anything is found, you'll see a console summary and a full list written to
+`lib/l10n/possible_hardcoded_texts.txt` — review it and either localize those spots by hand, or
+configure motrgem to auto-handle them (next section).
+
+### Configuring extra sinks (`motrgem.yaml`)
+
+To make motrgem treat your own design-system components exactly like `Text`/`AppBar` (full
+extraction *and* auto-replacement, not just a report), add an optional `motrgem.yaml` at your
+project root:
+
+```yaml
+extra_widgets:
+  MyStatCard:
+    - label
+    - subtitle
+extra_text_params:
+  - placeholder
+```
+
+- `extra_widgets` maps a class name to the parameter names on it that hold display text.
+- `extra_text_params` adds parameter names recognized on *any* widget (built-in or custom).
+
+Widgets configured this way are also excluded from the possible-hardcoded-text report, since
+they're now fully handled instead of merely flagged.
 
 ## Usage
 

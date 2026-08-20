@@ -49,6 +49,91 @@ class ExtractedText {
   }
 }
 
+/// Categories of text findPossibleHardcodedTexts can report.
+enum PossibleHardcodedTextCategory {
+  /// A string literal passed to a locally-declared (non-SDK) class
+  /// constructor — covers custom widgets and custom exception/error classes.
+  customConstructorArg,
+
+  /// A string literal inside a closure passed as a `validator:` argument.
+  validatorClosure,
+
+  /// A string literal element of a `const`/plain `List<String>` variable.
+  constStringList,
+}
+
+/// A string literal that looks like user-visible copy but sits outside the
+/// widgets/parameters motrgem auto-extracts, so it is reported rather than
+/// silently skipped or auto-rewritten.
+class PossibleHardcodedText {
+  final String text;
+  final String filePath;
+  final int line;
+  final int column;
+  final String source;
+  final PossibleHardcodedTextCategory category;
+
+  PossibleHardcodedText({
+    required this.text,
+    required this.filePath,
+    required this.line,
+    required this.column,
+    required this.source,
+    required this.category,
+  });
+
+  @override
+  String toString() => '$filePath:$line:$column - "$text" ($source)';
+}
+
+/// Skips URLs, paths, IDs, format strings, etc. Shared by the main extractor
+/// and the possible-hardcoded-text scan so both apply the same definition of
+/// "looks like real copy".
+bool isTechnicalString(String text) {
+  final technicalPatterns = [
+    RegExp(r'^https?://'),
+    RegExp(r'^www\.'),
+    RegExp(r'^/'),
+    RegExp(r'^\d+$'),
+    RegExp(r'^[A-Z_]+$'), // ALL_CAPS constants
+    RegExp(r'%[sd]'), // Format strings
+    RegExp(r'\$\{'), // Template strings
+  ];
+
+  return technicalPatterns.any((pattern) => pattern.hasMatch(text));
+}
+
+/// Extracts the literal text of a simple string expression (no placeholder
+/// bookkeeping), or null if [expression] isn't a plain/interpolated string
+/// literal we can render as a single display string.
+String? _plainStringOf(Expression expression) {
+  if (expression is SimpleStringLiteral) return expression.value;
+  if (expression is AdjacentStrings) {
+    final buffer = StringBuffer();
+    for (final part in expression.strings) {
+      final text = _plainStringOf(part);
+      if (text == null) return null;
+      buffer.write(text);
+    }
+    return buffer.toString();
+  }
+  if (expression is StringInterpolation) {
+    final buffer = StringBuffer();
+    for (final element in expression.elements) {
+      if (element is InterpolationString) {
+        buffer.write(element.value);
+      } else {
+        buffer.write('{value}');
+      }
+    }
+    return buffer.toString();
+  }
+  if (expression is ParenthesizedExpression) {
+    return _plainStringOf(expression.expression);
+  }
+  return null;
+}
+
 class TextExtractor {
   TextExtractor();
 
@@ -64,9 +149,8 @@ class TextExtractor {
     'async', 'await', 'yield',
   };
 
-  /// Extracts all hardcoded text strings from Flutter widget files in the project
-  Future<List<ExtractedText>> extractTextFromProject(String projectPath) async {
-    final List<ExtractedText> extractedTexts = [];
+  /// Resolves and validates the project's lib/ directory.
+  String _resolveLibPath(String projectPath) {
     final libPath = path.normalize(
       path.absolute(path.join(projectPath, 'lib')),
     );
@@ -75,18 +159,45 @@ class TextExtractor {
       throw Exception('lib directory not found at: $libPath');
     }
 
-    // Create analysis context
-    final collection = AnalysisContextCollection(includedPaths: [libPath]);
+    return libPath;
+  }
 
-    // Get all Dart files in lib directory
-    final dartFiles = Directory(libPath)
+  /// Lists all Dart files under [libPath].
+  List<File> _listDartFiles(String libPath) {
+    return Directory(libPath)
         .listSync(recursive: true)
         .whereType<File>()
         .where((file) => file.path.endsWith('.dart'))
         .toList();
+  }
+
+  /// Extracts all hardcoded text strings from Flutter widget files in the
+  /// project. [extraWidgets] and [extraTextParams] extend the built-in
+  /// widget/parameter recognition (see `motrgem.yaml`'s `extra_widgets` and
+  /// `extra_text_params`), so teams can opt their own design-system
+  /// components into full extraction + replacement.
+  Future<List<ExtractedText>> extractTextFromProject(
+    String projectPath, {
+    Map<String, List<String>> extraWidgets = const {},
+    Set<String> extraTextParams = const {},
+  }) async {
+    final List<ExtractedText> extractedTexts = [];
+    final libPath = _resolveLibPath(projectPath);
+    final collection = AnalysisContextCollection(includedPaths: [libPath]);
+    final dartFiles = _listDartFiles(libPath);
+
+    final mergedExtraParams = {
+      ...extraTextParams,
+      for (final params in extraWidgets.values) ...params,
+    };
 
     for (final file in dartFiles) {
-      final texts = await _extractTextFromFile(file.path, collection);
+      final texts = await _extractTextFromFile(
+        file.path,
+        collection,
+        extraWidgets: extraWidgets.keys.toSet(),
+        extraTextParams: mergedExtraParams,
+      );
       extractedTexts.addAll(texts);
     }
 
@@ -96,8 +207,10 @@ class TextExtractor {
   /// Extracts text from a single Dart file
   Future<List<ExtractedText>> _extractTextFromFile(
     String filePath,
-    AnalysisContextCollection collection,
-  ) async {
+    AnalysisContextCollection collection, {
+    Set<String> extraWidgets = const {},
+    Set<String> extraTextParams = const {},
+  }) async {
     final extractedTexts = <ExtractedText>[];
 
     try {
@@ -105,7 +218,12 @@ class TextExtractor {
       final result = await context.currentSession.getResolvedUnit(filePath);
 
       if (result is ResolvedUnitResult) {
-        final visitor = _TextVisitor(filePath, result.lineInfo);
+        final visitor = _TextVisitor(
+          filePath,
+          result.lineInfo,
+          extraWidgets: extraWidgets,
+          extraTextParams: extraTextParams,
+        );
         result.unit.visitChildren(visitor);
         extractedTexts.addAll(visitor.extractedTexts);
       }
@@ -360,6 +478,73 @@ class TextExtractor {
 
     return false;
   }
+
+  /// Scans the project for user-visible-looking string literals that sit
+  /// outside what [extractTextFromProject] auto-extracts: string arguments
+  /// passed to locally-declared (non-SDK) class constructors — which covers
+  /// both custom widgets and custom exception/error classes — strings
+  /// inside `validator:` closures, and elements of `const`/plain
+  /// `List<String>` variables. These are reported only, never rewritten,
+  /// since we can't safely assume every call site has the same
+  /// `BuildContext` availability an SDK widget does.
+  ///
+  /// [extraWidgets]' keys are treated as already handled (matching
+  /// [extractTextFromProject]) and excluded from the report.
+  Future<List<PossibleHardcodedText>> findPossibleHardcodedTexts(
+    String projectPath, {
+    Map<String, List<String>> extraWidgets = const {},
+  }) async {
+    final libPath = _resolveLibPath(projectPath);
+    final collection = AnalysisContextCollection(includedPaths: [libPath]);
+    final dartFiles = _listDartFiles(libPath);
+
+    // Pass 1: collect every class the project itself declares, so we can
+    // tell "custom widget/class we don't recognize" apart from an SDK type
+    // we simply don't special-case.
+    final localClassNames = <String>{};
+    for (final file in dartFiles) {
+      try {
+        final context = collection.contextFor(file.path);
+        final result = await context.currentSession.getResolvedUnit(file.path);
+        if (result is ResolvedUnitResult) {
+          final collector = _ClassNameCollector();
+          result.unit.visitChildren(collector);
+          localClassNames.addAll(collector.classNames);
+        }
+      } catch (e) {
+        // Best-effort: a file that fails to resolve here will also have
+        // failed in extractTextFromProject, which already reports it.
+      }
+    }
+
+    final excludedTypeNames = {
+      ..._TextVisitor._builtinTextWidgets,
+      ...extraWidgets.keys,
+    };
+
+    // Pass 2: find the actual possible-hardcoded-text findings.
+    final findings = <PossibleHardcodedText>[];
+    for (final file in dartFiles) {
+      try {
+        final context = collection.contextFor(file.path);
+        final result = await context.currentSession.getResolvedUnit(file.path);
+        if (result is ResolvedUnitResult) {
+          final visitor = _PossibleHardcodedTextVisitor(
+            file.path,
+            result.lineInfo,
+            localClassNames: localClassNames,
+            excludedTypeNames: excludedTypeNames,
+          );
+          result.unit.visitChildren(visitor);
+          findings.addAll(visitor.findings);
+        }
+      } catch (e) {
+        // Best-effort scan; skip files that fail to resolve.
+      }
+    }
+
+    return findings;
+  }
 }
 
 class _TextWithPlaceholders {
@@ -374,8 +559,11 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
   final lineInfo;
   final List<ExtractedText> extractedTexts = [];
 
+  final Set<String> textWidgets;
+  final Set<String> textParams;
+
   // Common Flutter widgets that contain text
-  static const textWidgets = {
+  static const _builtinTextWidgets = {
     'Text',
     'AppBar',
     'TextButton',
@@ -391,7 +579,30 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
     'InputDecoration',
   };
 
-  _TextVisitor(this.filePath, this.lineInfo);
+  static const _builtinTextParams = {
+    'title',
+    'label',
+    'tooltip',
+    'text',
+    'data',
+    'message',
+    'hintText',
+    'labelText',
+    'helperText',
+    'errorText',
+    'counterText',
+    'prefixText',
+    'suffixText',
+    'semanticLabel',
+  };
+
+  _TextVisitor(
+    this.filePath,
+    this.lineInfo, {
+    Set<String> extraWidgets = const {},
+    Set<String> extraTextParams = const {},
+  })  : textWidgets = {..._builtinTextWidgets, ...extraWidgets},
+        textParams = {..._builtinTextParams, ...extraTextParams};
 
   @override
   void visitInstanceCreationExpression(InstanceCreationExpression node) {
@@ -548,7 +759,7 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
     List<String> placeholders = const [],
   }) {
     if (text.isEmpty || text.length < 2) return;
-    if (_isTechnicalString(text)) return;
+    if (isTechnicalString(text)) return;
 
     final lineLocation = lineInfo.getLocation(offset);
 
@@ -567,40 +778,7 @@ class _TextVisitor extends RecursiveAstVisitor<void> {
     extractedTexts.add(extractedText);
   }
 
-  bool _isTextParameter(String paramName) {
-    const textParams = {
-      'title',
-      'label',
-      'tooltip',
-      'text',
-      'data',
-      'message',
-      'hintText',
-      'labelText',
-      'helperText',
-      'errorText',
-      'counterText',
-      'prefixText',
-      'suffixText',
-      'semanticLabel',
-    };
-    return textParams.contains(paramName);
-  }
-
-  bool _isTechnicalString(String text) {
-    // Skip URLs, paths, IDs, format strings, etc.
-    final technicalPatterns = [
-      RegExp(r'^https?://'),
-      RegExp(r'^www\.'),
-      RegExp(r'^/'),
-      RegExp(r'^\d+$'),
-      RegExp(r'^[A-Z_]+$'), // ALL_CAPS constants
-      RegExp(r'%[sd]'), // Format strings
-      RegExp(r'\$\{'), // Template strings
-    ];
-
-    return technicalPatterns.any((pattern) => pattern.hasMatch(text));
-  }
+  bool _isTextParameter(String paramName) => textParams.contains(paramName);
 }
 
 /// AST Visitor to find and remove const keywords from widgets with AppLocalizations
@@ -741,4 +919,150 @@ class _ConstRemovalRange {
 
   @override
   int get hashCode => start.hashCode ^ end.hashCode;
+}
+
+/// Collects the names of every class declared in the visited compilation
+/// unit(s), used to tell a locally-defined ("custom") widget/class apart
+/// from an SDK type findPossibleHardcodedTexts simply doesn't recognize.
+class _ClassNameCollector extends RecursiveAstVisitor<void> {
+  final Set<String> classNames = {};
+
+  @override
+  void visitClassDeclaration(ClassDeclaration node) {
+    classNames.add(node.name.lexeme);
+    super.visitClassDeclaration(node);
+  }
+}
+
+/// Collects string literals inside a `validator:` closure body. Kept
+/// deliberately simple (plain literals only, not interpolations/adjacent
+/// strings) since this is a best-effort report, not a rewrite.
+class _ClosureStringCollector extends RecursiveAstVisitor<void> {
+  final List<SimpleStringLiteral> stringLiterals = [];
+
+  @override
+  void visitSimpleStringLiteral(SimpleStringLiteral node) {
+    stringLiterals.add(node);
+    super.visitSimpleStringLiteral(node);
+  }
+}
+
+/// AST visitor backing [TextExtractor.findPossibleHardcodedTexts]: flags
+/// string literals that look like user-visible copy but sit outside the
+/// widgets/parameters the main extractor auto-handles.
+class _PossibleHardcodedTextVisitor extends RecursiveAstVisitor<void> {
+  final String filePath;
+  final lineInfo;
+  final Set<String> localClassNames;
+  final Set<String> excludedTypeNames;
+  final List<PossibleHardcodedText> findings = [];
+
+  _PossibleHardcodedTextVisitor(
+    this.filePath,
+    this.lineInfo, {
+    required this.localClassNames,
+    required this.excludedTypeNames,
+  });
+
+  @override
+  void visitInstanceCreationExpression(InstanceCreationExpression node) {
+    final typeName = node.constructorName.type.toString();
+
+    if (localClassNames.contains(typeName) &&
+        !excludedTypeNames.contains(typeName)) {
+      for (final argument in node.argumentList.arguments) {
+        final expression =
+            argument is NamedExpression ? argument.expression : argument;
+        final paramLabel = argument is NamedExpression
+            ? argument.name.label.name
+            : 'positional arg';
+        _checkStringExpression(
+          expression,
+          '$typeName.$paramLabel',
+          PossibleHardcodedTextCategory.customConstructorArg,
+        );
+      }
+    }
+
+    super.visitInstanceCreationExpression(node);
+  }
+
+  @override
+  void visitNamedExpression(NamedExpression node) {
+    if (node.name.label.name == 'validator' &&
+        node.expression is FunctionExpression) {
+      final collector = _ClosureStringCollector();
+      (node.expression as FunctionExpression).body.accept(collector);
+      for (final literal in collector.stringLiterals) {
+        _record(
+          literal.value,
+          literal.offset,
+          'validator closure',
+          PossibleHardcodedTextCategory.validatorClosure,
+        );
+      }
+    }
+    super.visitNamedExpression(node);
+  }
+
+  @override
+  void visitVariableDeclaration(VariableDeclaration node) {
+    final initializer = node.initializer;
+    if (initializer is ListLiteral) {
+      final stringElements = <Expression>[];
+      var allStrings = true;
+      for (final element in initializer.elements) {
+        if (element is SimpleStringLiteral ||
+            element is StringInterpolation ||
+            element is AdjacentStrings) {
+          stringElements.add(element as Expression);
+        } else {
+          allStrings = false;
+          break;
+        }
+      }
+      // Require 2+ elements so a single-string list (often an id/key, not
+      // display data) doesn't get flagged.
+      if (allStrings && stringElements.length >= 2) {
+        for (final element in stringElements) {
+          _checkStringExpression(
+            element,
+            'const list ${node.name.lexeme}',
+            PossibleHardcodedTextCategory.constStringList,
+          );
+        }
+      }
+    }
+    super.visitVariableDeclaration(node);
+  }
+
+  void _checkStringExpression(
+    Expression expression,
+    String source,
+    PossibleHardcodedTextCategory category,
+  ) {
+    final text = _plainStringOf(expression);
+    if (text == null) return;
+    _record(text, expression.offset, source, category);
+  }
+
+  void _record(
+    String text,
+    int offset,
+    String source,
+    PossibleHardcodedTextCategory category,
+  ) {
+    if (text.isEmpty || text.length < 2) return;
+    if (isTechnicalString(text)) return;
+
+    final loc = lineInfo.getLocation(offset);
+    findings.add(PossibleHardcodedText(
+      text: text,
+      filePath: filePath,
+      line: loc?.lineNumber ?? 0,
+      column: loc?.columnNumber ?? 0,
+      source: source,
+      category: category,
+    ));
+  }
 }

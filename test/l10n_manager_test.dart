@@ -117,6 +117,80 @@ class MyWidget {
         ),
       );
     });
+
+    test(
+        'reports possible hardcoded text in a custom widget even when zero '
+        'SDK-widget texts are found (no false "fully localized" signal)',
+        () async {
+      final projectPath = await _createProject('''
+class MyStatCard {
+  MyStatCard({String? label});
+}
+
+void useWidgets() {
+  MyStatCard(label: 'Bookings');
+}
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final manager = L10nManager(projectPath);
+      final result = await manager.processProject();
+
+      // The primary auto-fix path still finds nothing to extract...
+      expect(result.extractedCount, 0);
+
+      // ...but the possible-hardcoded-text report catches it instead of
+      // staying silent.
+      final reportFile = File(
+        path.join(projectPath, 'lib', 'l10n', 'possible_hardcoded_texts.txt'),
+      );
+      expect(reportFile.existsSync(), isTrue);
+      final report = await reportFile.readAsString();
+      expect(report, contains('Bookings'));
+      expect(report, contains('MyStatCard'));
+    });
+
+    test(
+        'motrgem.yaml extra_widgets makes a custom widget fully '
+        'extracted/replaced instead of only reported', () async {
+      final projectPath = await _createProject('''
+class MyStatCard {
+  MyStatCard({String? label});
+}
+
+class MyWidget {
+  Widget build() {
+    return MyStatCard(label: 'Bookings');
+  }
+}
+''');
+      await File(path.join(projectPath, 'motrgem.yaml')).writeAsString('''
+extra_widgets:
+  MyStatCard:
+    - label
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final manager = L10nManager(projectPath);
+      final result = await manager.processProject(replaceInCode: true);
+
+      expect(result.extractedCount, 1);
+      expect(result.replacedCount, 1);
+
+      final content =
+          await File(path.join(projectPath, 'lib', 'main.dart'))
+              .readAsString();
+      expect(content, contains('AppLocalizations.of(context)!.bookings'));
+
+      // Configured sinks are treated as handled, so they must not also
+      // appear in the possible-hardcoded-text report.
+      final reportFile = File(
+        path.join(projectPath, 'lib', 'l10n', 'possible_hardcoded_texts.txt'),
+      );
+      if (reportFile.existsSync()) {
+        expect(await reportFile.readAsString(), isNot(contains('Bookings')));
+      }
+    });
   }, timeout: const Timeout(Duration(seconds: 60)));
 
   group('L10nManager.addLocale', () {

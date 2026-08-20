@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'package:path/path.dart' as path;
+import 'package:yaml/yaml.dart';
 import 'Text_extractor.dart';
 import 'arb_manager.dart';
 
@@ -20,8 +21,20 @@ class L10nManager {
   }) async {
     print('🔍 Extracting texts from project: $projectPath');
 
+    final config = await _loadMotrgemConfig();
+
+    // Step 0: report text that sits outside what auto-extraction covers
+    // (custom widgets, validator closures, const string lists) *before* the
+    // empty-extraction early return below, so a project with zero SDK-widget
+    // hits doesn't get a false "fully localized" signal.
+    await _reportPossibleHardcodedTexts(config.extraWidgets);
+
     // Step 1: Extract all texts
-    final extractedTexts = await extractor.extractTextFromProject(projectPath);
+    final extractedTexts = await extractor.extractTextFromProject(
+      projectPath,
+      extraWidgets: config.extraWidgets,
+      extraTextParams: config.extraTextParams,
+    );
 
     if (extractedTexts.isEmpty) {
       print('✅ No hardcoded texts found!');
@@ -298,6 +311,108 @@ class L10nManager {
         print('  ⚠️  Could not add import to $filePath: $e');
       }
     }
+  }
+
+  /// Loads the optional `motrgem.yaml` config from the project root. Its
+  /// `extra_widgets` map lets a team opt their own design-system components
+  /// into full extraction + replacement (treated just like `Text`/`AppBar`
+  /// etc.); `extra_text_params` adds parameter names recognized on any
+  /// widget. Missing or unparseable config behaves exactly like no config at
+  /// all (empty defaults) — fully backward compatible.
+  Future<({Map<String, List<String>> extraWidgets, Set<String> extraTextParams})>
+      _loadMotrgemConfig() async {
+    const empty = (
+      extraWidgets: <String, List<String>>{},
+      extraTextParams: <String>{},
+    );
+
+    final file = File(path.join(projectPath, 'motrgem.yaml'));
+    if (!file.existsSync()) {
+      return empty;
+    }
+
+    try {
+      final yamlDoc = loadYaml(await file.readAsString());
+      if (yamlDoc is! YamlMap) return empty;
+
+      final extraWidgets = <String, List<String>>{};
+      final rawWidgets = yamlDoc['extra_widgets'];
+      if (rawWidgets is YamlMap) {
+        for (final entry in rawWidgets.entries) {
+          final params = entry.value;
+          if (params is YamlList) {
+            extraWidgets[entry.key.toString()] =
+                params.map((p) => p.toString()).toList();
+          }
+        }
+      }
+
+      final extraTextParams = <String>{};
+      final rawParams = yamlDoc['extra_text_params'];
+      if (rawParams is YamlList) {
+        extraTextParams.addAll(rawParams.map((p) => p.toString()));
+      }
+
+      return (extraWidgets: extraWidgets, extraTextParams: extraTextParams);
+    } catch (e) {
+      print('  ⚠️  Could not parse motrgem.yaml: $e');
+      return empty;
+    }
+  }
+
+  /// Scans for user-visible-looking text that auto-extraction can't safely
+  /// reach (custom widget/exception constructor args, `validator:` closures,
+  /// const string lists — see TextExtractor.findPossibleHardcodedTexts) and
+  /// reports it: a console summary plus the full list written to
+  /// lib/l10n/possible_hardcoded_texts.txt, so it's never silently skipped.
+  Future<void> _reportPossibleHardcodedTexts(
+    Map<String, List<String>> extraWidgets,
+  ) async {
+    final findings = await extractor.findPossibleHardcodedTexts(
+      projectPath,
+      extraWidgets: extraWidgets,
+    );
+
+    if (findings.isEmpty) return;
+
+    print(
+      '\n⚠️  ${findings.length} possible additional hardcoded text(s) found '
+      'in custom widgets/validators/lists — not auto-fixed.',
+    );
+    const previewLimit = 15;
+    for (final finding in findings.take(previewLimit)) {
+      print('  $finding');
+    }
+    if (findings.length > previewLimit) {
+      print('  ... and ${findings.length - previewLimit} more');
+    }
+    await stdout.flush();
+
+    final reportFile = File(
+      path.join(projectPath, 'lib', 'l10n', 'possible_hardcoded_texts.txt'),
+    );
+    await reportFile.parent.create(recursive: true);
+
+    final buffer = StringBuffer()
+      ..writeln('Possible additional hardcoded text (not auto-fixed by motrgem)')
+      ..writeln('Generated: ${DateTime.now().toIso8601String()}')
+      ..writeln();
+
+    for (final category in PossibleHardcodedTextCategory.values) {
+      final inCategory =
+          findings.where((f) => f.category == category).toList();
+      if (inCategory.isEmpty) continue;
+
+      buffer.writeln('## ${category.name} (${inCategory.length})');
+      for (final finding in inCategory) {
+        buffer.writeln('  $finding');
+      }
+      buffer.writeln();
+    }
+
+    await reportFile.writeAsString(buffer.toString());
+    print('  📄 Full list written to lib/l10n/possible_hardcoded_texts.txt');
+    await stdout.flush();
   }
 
   /// Gets the package name from pubspec.yaml

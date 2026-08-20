@@ -1,3 +1,8 @@
+## 1.2.0
+
+- Added: motrgem now scans for hardcoded-looking text it can't safely auto-fix — string args passed to your own custom widget/exception classes (e.g. `MyStatCard(label: ...)`, `throw AuthError(message: ...)`), strings inside `validator:` closures, and elements of `const`/plain `List<String>` variables — and reports them (console summary + `lib/l10n/possible_hardcoded_texts.txt`) on every `--dry-run`/`--replace` run instead of silently skipping them. Fixes the "clean run but the app isn't actually fully localized" false-completion problem.
+- Added: optional `motrgem.yaml` config (`extra_widgets`, `extra_text_params`) lets a team opt their own design-system components into full auto-extraction + replacement, the same way built-in widgets like `Text` work
+
 ## 1.1.2
 
 - Fixed: generated ARB/AppLocalizations ids that collided with Dart reserved words (e.g. `continue`, `new`, `default`) now get a safe suffix (`continueLabel`) instead of producing invalid Dart

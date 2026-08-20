@@ -497,4 +497,159 @@ class MyWidget {
       expect(extractor.containsAppLocalizations(null), isFalse);
     });
   });
+
+  group('findPossibleHardcodedTexts', () {
+    test(
+        'flags string args on locally-declared class constructors '
+        '(named, positional, and via throw) but not on SDK widgets',
+        () async {
+      final projectPath = await _createProject('''
+class MyStatCard {
+  MyStatCard({String? label, String? subtitle});
+}
+
+class MyBadge {
+  MyBadge(String text);
+}
+
+class AuthError {
+  AuthError(String code, {String? message});
+}
+
+void useWidgets() {
+  MyStatCard(label: 'Bookings', subtitle: 'Total bookings');
+  MyBadge('Positional label text');
+  throw AuthError('session', message: 'Your session has expired.');
+  Text('Not flagged, this is an SDK widget');
+}
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final extractor = TextExtractor();
+      final findings = await extractor.findPossibleHardcodedTexts(projectPath);
+      final texts = findings.map((f) => f.text).toSet();
+
+      expect(texts, containsAll(<String>[
+        'Bookings',
+        'Total bookings',
+        'Positional label text',
+        'Your session has expired.',
+      ]));
+      expect(texts, isNot(contains('Not flagged, this is an SDK widget')));
+      expect(
+        findings.every(
+          (f) => f.category == PossibleHardcodedTextCategory.customConstructorArg,
+        ),
+        isTrue,
+      );
+    });
+
+    test('excludes widgets explicitly configured as extra sinks', () async {
+      final projectPath = await _createProject('''
+class MyStatCard {
+  MyStatCard({String? label});
+}
+
+class AuthError {
+  AuthError({String? message});
+}
+
+void useWidgets() {
+  MyStatCard(label: 'Bookings');
+  AuthError(message: 'Your session has expired.');
+}
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final extractor = TextExtractor();
+      final findings = await extractor.findPossibleHardcodedTexts(
+        projectPath,
+        extraWidgets: {
+          'MyStatCard': ['label'],
+        },
+      );
+      final texts = findings.map((f) => f.text).toSet();
+
+      // MyStatCard is now a configured sink (handled by extractTextFromProject
+      // instead), so it must not also show up in the possible-text report.
+      expect(texts, isNot(contains('Bookings')));
+      // AuthError was never configured, so it's still reported.
+      expect(texts, contains('Your session has expired.'));
+    });
+
+    test('flags strings inside a validator: closure', () async {
+      final projectPath = await _createProject('''
+class TextFormField {
+  TextFormField({String? Function(String?)? validator});
+}
+
+void useWidgets() {
+  TextFormField(
+    validator: (v) =>
+        v == null || v.isEmpty ? 'Enter your email address.' : null,
+  );
+}
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final extractor = TextExtractor();
+      final findings = await extractor.findPossibleHardcodedTexts(projectPath);
+
+      expect(findings, hasLength(1));
+      expect(findings.single.text, 'Enter your email address.');
+      expect(
+        findings.single.category,
+        PossibleHardcodedTextCategory.validatorClosure,
+      );
+    });
+
+    test(
+        'flags elements of a multi-string const list but not a '
+        'single-string list', () async {
+      final projectPath = await _createProject('''
+const List<String> kDaysOfWeek = ['Monday', 'Tuesday', 'Wednesday'];
+final singleName = ['OnlyOne'];
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final extractor = TextExtractor();
+      final findings = await extractor.findPossibleHardcodedTexts(projectPath);
+      final texts = findings.map((f) => f.text).toSet();
+
+      expect(texts, {'Monday', 'Tuesday', 'Wednesday'});
+      expect(
+        findings.every(
+          (f) => f.category == PossibleHardcodedTextCategory.constStringList,
+        ),
+        isTrue,
+      );
+    });
+  });
+
+  group('extraWidgets / extraTextParams', () {
+    test('extend normal extraction to team-configured sinks', () async {
+      final projectPath = await _createProject('''
+class MyStatCard {
+  MyStatCard({String? label, String? placeholder});
+}
+
+void useWidgets() {
+  MyStatCard(label: 'Bookings', placeholder: 'Search bookings');
+}
+''');
+      addTearDown(() => Directory(projectPath).delete(recursive: true));
+
+      final extractor = TextExtractor();
+      final texts = await extractor.extractTextFromProject(
+        projectPath,
+        extraWidgets: {
+          'MyStatCard': ['label'],
+        },
+        extraTextParams: {'placeholder'},
+      );
+      final values = texts.map((t) => t.text).toSet();
+
+      expect(values, {'Bookings', 'Search bookings'});
+    });
+  });
 }
